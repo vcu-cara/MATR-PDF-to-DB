@@ -43,6 +43,25 @@ detail_field <- function(label, ..., wide = FALSE) {
   div(class = c("detail-field", if (wide) "is-wide"), span(class = "detail-label", label), ...)
 }
 
+# Fields side by side on one line of the details, the last one taking the room that is left (on a phone they
+# go one under the other).
+# ...: `detail_field()`s.
+detail_row <- function(...) {
+  div(class = "detail-row is-wide", ...)
+}
+
+# A field's name with a small "i" after it that says what the field is for when it is pointed at or has the
+# keyboard's focus, so the explanation takes no room on the page.
+# label: The field's name.
+# help: What it is for, in a sentence.
+label_with_help <- function(label, help) {
+  tagList(label, " ", bslib::tooltip(
+    tags$button(type = "button", class = "btn btn-link field-help", `aria-label` = paste("About", label), app_icon("help")),
+    help,
+    placement = "right" # beside the name, clear of the field under it
+  ))
+}
+
 # A coloured circle that shows how far something has got.
 # state: `"done"`, `"in_progress"`, `"not_started"` or `"attention"`.
 progress_dot <- function(state) {

@@ -16,7 +16,9 @@
 #   again, since other staff change them.
 # open_reading: A function taking an extraction being read that shows how reading it is going (New Extraction's),
 #   or `NULL` to go to New Extraction.
-make_edit_server <- function(id, connection, me, show_page, active = NULL, open_reading = NULL) {
+# open_draft: A function taking a draft's record that opens it on Edit Extraction, for a wave's Edit extraction
+#   (`extraction_service_reopen_wave()`), or `NULL` to go to Extraction Drafts.
+make_edit_server <- function(id, connection, me, show_page, active = NULL, open_reading = NULL, open_draft = NULL) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
@@ -198,6 +200,7 @@ make_edit_server <- function(id, connection, me, show_page, active = NULL, open_
         delete = verb("delete"),
         empty = ask_empty(),
         reextract_wave = if (identical(kind(), "wave")) showModal(reextract_wave_dialog(ns, edit_label(snapshot(), "wave", row()))),
+        edit_wave_extraction = if (identical(kind(), "wave")) edit_wave_extraction(),
         back = after_done(),
         retry = read_again()
       )
@@ -390,7 +393,8 @@ make_edit_server <- function(id, connection, me, show_page, active = NULL, open_
             icon_label("delete", "Delete"), "delete",
             class = "btn btn-delete", disabled = !is.null(no_delete), title = no_delete
           ),
-          if (kind() == "wave") wave_reextract_button(row())
+          if (kind() == "wave") wave_reextract_button(row()),
+          if (kind() == "wave") wave_edit_extraction_button(any(snapshot()$wave_question$wave_id %in% row()$wave_id))
         ))
       }
       stuck <- !is.null(blocked) || change$stuck()
@@ -460,6 +464,17 @@ make_edit_server <- function(id, connection, me, show_page, active = NULL, open_
           return()
         }
       }
+      # an update that merges the row into another (a tag renamed to another tag's name) asks first too
+      merge <- if (identical(verb(), "update")) change$built()$merge
+      if (!is.null(merge)) {
+        showModal(edit_merge_dialog(merge, ns("confirm_merge")))
+        return()
+      }
+      proceed()
+    })
+
+    observeEvent(input$confirm_merge, {
+      removeModal()
       proceed()
     })
 
@@ -477,7 +492,10 @@ make_edit_server <- function(id, connection, me, show_page, active = NULL, open_
         return()
       }
       read_again()
-      done(list(verb = verb(), summary = built$summary, history_id = applied$history_id, new_ids = applied$new_ids))
+      done(list(
+        verb = verb(), summary = built$summary, history_id = applied$history_id, new_ids = applied$new_ids,
+        shows = built$merge$key # a row merged into another is gone: the other is shown afterwards
+      ))
       verb("done")
     }
 
@@ -499,10 +517,12 @@ make_edit_server <- function(id, connection, me, show_page, active = NULL, open_
       )
     }
 
-    # After a change: back to the item changed, or (an add or a delete) to nothing picked.
+    # After a change: back to the item changed (the one it was merged into, if it was), or (an add or a delete) to
+    # nothing picked.
     after_done <- function() {
       outcome <- done()
       done(NULL)
+      if (!is.null(outcome$shows)) picked(outcome$shows)
       changed_still_there <- identical(outcome$verb, "update") && !is.null(picked())
       if (!changed_still_there) picked(NULL)
       verb(if (changed_still_there) "view" else "")
@@ -556,6 +576,20 @@ make_edit_server <- function(id, connection, me, show_page, active = NULL, open_
       showNotification("The wave is emptied and its PDF is being read again.", type = "message")
       if (is.function(open_reading)) open_reading(record) else show_page("extraction")
     })
+
+    # ------ Edit a wave's extraction ----------------------------------------------------------
+    # What the wave in the details asks is opened on Edit Extraction as a draft (the one already open for it, if
+    # there is one); pushing it there replaces what the wave asks. Nothing changes here until then.
+    edit_wave_extraction <- function() {
+      record <- try_showing(
+        extraction_service_reopen_wave(connection, key_text(row()$wave_id), me),
+        "Couldn't open the wave's extraction"
+      )
+      if (is.null(record)) {
+        return()
+      }
+      if (is.function(open_draft)) open_draft(record) else show_page("drafts")
+    }
 
     observeEvent(input$to_history, show_page("edit_history"))
 

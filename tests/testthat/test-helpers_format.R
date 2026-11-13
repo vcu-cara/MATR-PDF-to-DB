@@ -9,16 +9,27 @@ test_that("times are kept in UTC and read back from the app's or the database's 
 })
 
 test_that("how long ago is said in words", {
-  now <- as.POSIXct("2026-10-03 15:00:00")
+  eastern <- function(text) as.POSIXct(text, tz = "America/New_York")
+  now <- eastern("2026-10-03 15:00:00")
   expect_equal(time_ago(now - 20, now), "just now")
   expect_equal(time_ago(now - 60, now), "1 minute ago")
   expect_equal(time_ago(now - 5 * 60, now), "5 minutes ago")
   expect_equal(time_ago(now - 2 * 3600, now), "2 hours ago")
-  expect_equal(time_ago(as.POSIXct("2026-10-02 12:00:00"), now), "yesterday")
-  expect_equal(time_ago(as.POSIXct("2026-09-29 12:00:00"), now), "on Sep 29")
-  expect_equal(day_phrase(as.POSIXct("2026-10-03 09:15:00"), now), "today at 9:15 AM")
-  expect_equal(time_ago(as.POSIXct("2024-09-29 12:00:00"), now), "on Sep 29, 2024") # another year says which
-  expect_equal(day_phrase(as.POSIXct("2025-12-31 12:00:00"), as.POSIXct("2026-01-01 15:00:00")), "yesterday")
+  expect_equal(time_ago(eastern("2026-10-02 12:00:00"), now), "yesterday")
+  expect_equal(time_ago(eastern("2026-09-29 12:00:00"), now), "on Sep 29")
+  expect_equal(day_phrase(eastern("2026-10-03 09:15:00"), now), "today at 9:15 AM")
+  expect_equal(time_ago(eastern("2024-09-29 12:00:00"), now), "on Sep 29, 2024") # another year says which
+  expect_equal(day_phrase(eastern("2025-12-31 12:00:00"), eastern("2026-01-01 15:00:00")), "yesterday")
+})
+
+test_that("times are said in Eastern time, wherever the server running the site is", {
+  withr::local_timezone("UTC") # as on Posit Connect
+  now <- parse_time("2026-11-12T20:00:00Z") # 3:00 PM in Virginia
+  expect_equal(day_phrase(parse_time("2026-11-12T14:15:00Z"), now), "today at 9:15 AM")
+  expect_equal(clock_time(parse_time("2026-11-12T19:05:00Z")), "2:05 PM")
+  # 9:30 PM on the 11th in Virginia is already the 12th in UTC: it was yesterday, not three hours ago today
+  expect_equal(time_ago(parse_time("2026-11-12T02:30:00Z"), parse_time("2026-11-12T14:00:00Z")), "yesterday")
+  expect_equal(day_phrase(parse_time("2026-07-04T03:00:00Z"), now), "on Jul 3") # daylight time: four hours behind
 })
 
 test_that("durations and sizes are short words", {

@@ -1,9 +1,8 @@
 # The Edit Extraction page: a title on the left and a row of buttons on the right, with how far the checking
 # has got across the page under both, over the extracted questionnaire.
 # One panel: the whole questionnaire as it was extracted, as a list with the picked block's details
-# beside it (`extraction_outline_ui()`). The header's buttons: Undo, Save, Normalize (answer choices worded as
-# the database words them: `normalize_dialog()`), Open PDF (if the file is here: it opens in its own tab, at the
-# page of the block picked), Re-extract (an AI-Powered draft read again with the latest prompt:
+# beside it (`extraction_outline_ui()`). The header's buttons: Undo, Save, Open PDF (if the file is here: it
+# opens in its own tab, at the page of the block picked), Re-extract (an AI-Powered draft read again with the latest prompt:
 # `reextract_dialog()`) and Preview and push (where it goes, what pushing adds, and the push itself:
 # `push_dialog()`).
 # On a phone the buttons are only their icons, sharing a row of their own evenly under the progress bar.
@@ -27,10 +26,6 @@ edit_extraction_ui <- function(id) {
           class = "review-buttons",
           actionButton(ns("undo"), icon_label("undo", "Undo"), class = "btn-outline-dark", disabled = TRUE, title = "Undo"),
           actionButton(ns("save"), icon_label("save", "Save"), class = "btn-outline-dark", disabled = TRUE, title = "Save"),
-          actionButton(
-            ns("normalize"), icon_label("normalize", "Normalize"), class = "btn-outline-dark",
-            title = "Word answer choices as the database does"
-          ),
           uiOutput(ns("pdf_link"), inline = TRUE),
           uiOutput(ns("reextract_button"), inline = TRUE),
           uiOutput(ns("request_button"), inline = TRUE)
@@ -136,6 +131,7 @@ push_dialog <- function(ns, draft) {
     easyClose = FALSE,
     uiOutput(ns("push_blockers")),
     extraction_request_ui(list(), NULL, basic_info = extraction_info_ui(ns("info")), questionnaire = FALSE),
+    div(class = "edit-extraction-rewordings", `data-ns` = ns(""), uiOutput(ns("push_rewordings"))),
     uiOutput(ns("push_what")),
     extraction_request_ui(list(unchecked = extraction_service_unchecked(draft)), draft, table = uiOutput(ns("preview_table"))),
     footer = tagList(
@@ -146,54 +142,46 @@ push_dialog <- function(ns, draft) {
   )
 }
 
-# The Normalize dialog: the answer choices that could be worded as the database words them, each with a button
-# that does it (a change like any other, which Undo takes back). Nothing is written to the database: it is all in
-# the draft until it is pushed.
-normalize_dialog <- function(ns) {
-  modalDialog(
-    title = "Normalize",
-    size = "xl",
-    easyClose = TRUE,
-    uiOutput(ns("normalize_body")),
-    footer = modalButton("Close")
-  )
-}
-
-# What the Normalize dialog lists.
-# choices: From `normalize_service_choice_suggestions()`.
-# Returns: A UI element. Its buttons are data-action buttons of the page (`use_choice`), so the body carries
-#   the page's namespace.
-normalize_ui <- function(ns, choices) {
+# The wordings of a reopened extraction that other places print too, each with the choice of where its new
+# words go: only here (this questionnaire gets a wording of its own) or everywhere (the wording itself changes,
+# in every questionnaire that prints it). The choice made is the filled-in button.
+# choices: From `extraction_service_rewordings()`.
+# Returns: A section of the Push dialog, or `NULL` when there is nothing to choose. Its buttons are data-action
+#   buttons of the page (`reword`).
+rewordings_ui <- function(choices) {
+  if (nrow(choices) == 0) {
+    return(NULL)
+  }
+  choice <- function(row, everywhere, label, title) {
+    review_button(
+      label, "reword", `data-id` = row$id, `data-everywhere` = if (everywhere) "true" else "false",
+      class = c("btn btn-sm", if (identical(row$everywhere, everywhere)) "btn-dark" else "btn-outline-dark"),
+      `aria-pressed` = if (identical(row$everywhere, everywhere)) "true" else "false", title = title
+    )
+  }
   div(
-    class = "normalize", `data-ns` = ns(""),
-    div(
-      class = "request-section",
-      h3("Answer choices"),
-      p(
-        class = "form-text",
-        "Ranges, dashes and abbreviations are already written one way (“1 to 2” is “1-2”, “hrs” is “hours”). ",
-        "These choices are worded a little differently from one the database has, or another of this questionnaire's."
-      ),
-      if (nrow(choices) == 0) {
-        p(class = "text-muted", "Nothing to change.")
-      } else {
-        tags$table(
-          class = "table table-sm normalize-table",
-          tags$thead(tags$tr(tags$th("This questionnaire has"), tags$th(class = "is-count", "Choices"), tags$th("Use instead"), tags$th())),
-          tags$tbody(lapply(seq_len(nrow(choices)), function(i) {
-            row <- choices[i, ]
-            tags$tr(
-              tags$td(row$from),
-              tags$td(class = "is-count", row$uses),
-              tags$td(
-                row$to, " ",
-                span(class = "form-text", if (isTRUE(row$in_database)) "(in the database)" else "(more of this questionnaire's choices)")
-              ),
-              tags$td(review_button("Use it", "use_choice", `data-from` = row$from, `data-to` = row$to))
-            )
-          }))
+    class = "request-section",
+    h3("Wordings other places print too"),
+    p(
+      class = "form-text",
+      "You changed these words, and other places print the same wording. Choose where the new words go: ",
+      strong("only here"), " gives this questionnaire a wording of its own and leaves the others as they are; ",
+      strong("everywhere"), " changes the wording itself, in every place that prints it."
+    ),
+    tags$table(
+      class = "table table-sm rewordings-table",
+      tags$thead(tags$tr(tags$th("Was"), tags$th("Now"), tags$th("Also printed in"), tags$th("Change it"))),
+      tags$tbody(lapply(seq_len(nrow(choices)), function(i) {
+        row <- choices[i, ]
+        tags$tr(
+          tags$td(row$was), tags$td(row$now), tags$td(row$elsewhere),
+          tags$td(div(
+            class = "btn-group", role = "group", `aria-label` = "Where the new words go",
+            choice(row, FALSE, "Only here", "This questionnaire gets a wording of its own; the other places keep theirs"),
+            choice(row, TRUE, "Everywhere", "The wording itself changes, in every place that prints it")
+          ))
         )
-      }
+      }))
     )
   )
 }

@@ -89,6 +89,7 @@ alter default privileges in schema public grant usage, select                  o
 grant execute on function public.push_extraction(bigint, bigint, boolean) to service_role;
 grant execute on function public.apply_change(bigint, jsonb, text)        to service_role;
 grant execute on function public.empty_wave(bigint, bigint)               to service_role;
+grant execute on function public.reopen_wave(bigint, bigint)              to service_role;
 grant execute on function public.empty_questionnaire(bigint, bigint)      to service_role;
 grant execute on function public.empty_study(bigint, bigint)              to service_role;
 grant execute on function public.empty_registry(bigint, bigint)           to service_role;
@@ -99,6 +100,7 @@ grant execute on all functions in schema private to service_role;
 revoke all on function public.push_extraction(bigint, bigint, boolean) from public, anon, authenticated;
 revoke all on function public.apply_change(bigint, jsonb, text)        from public, anon, authenticated;
 revoke all on function public.empty_wave(bigint, bigint)               from public, anon, authenticated;
+revoke all on function public.reopen_wave(bigint, bigint)              from public, anon, authenticated;
 revoke all on function public.empty_questionnaire(bigint, bigint)      from public, anon, authenticated;
 revoke all on function public.empty_study(bigint, bigint)              from public, anon, authenticated;
 revoke all on function public.empty_registry(bigint, bigint)           from public, anon, authenticated;

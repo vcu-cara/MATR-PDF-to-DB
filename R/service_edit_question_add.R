@@ -50,6 +50,15 @@ edit_variable_text <- function(value) {
   if (is.null(value) || length(value) == 0 || is.na(value[1])) "" else trimws(as.character(value[1]))
 }
 
+# One variable's choices as the database keeps them (normal_answer(), and the sexes written out where they are all
+# it offers), with "" for a blank.
+edit_choice_answers <- function(choices) {
+  answers <- vapply(choices, function(choice) edit_variable_text(choice$answer_option), character(1))
+  answers <- sexes_written_out(normal_answer(answers))
+  answers[is.na(answers)] <- ""
+  answers
+}
+
 # The check of the variables field.
 # The rules the database keeps, for the variables of one question: each has a MATR ID no other variable of the
 # questionnaire has, and either the kind of answer it takes (a write-in) or its choices, each filled in, listed
@@ -88,8 +97,7 @@ edit_variables_problem <- function(snap, q) {
       if (length(choices) == 0) {
         return(say("add its choices."))
       }
-      answers <- vapply(choices, function(choice) normal_answer(edit_variable_text(choice$answer_option)), character(1))
-      answers[is.na(answers)] <- ""
+      answers <- edit_choice_answers(choices)
       codes <- vapply(choices, function(choice) edit_variable_text(choice$code_value), character(1))
       if (!all(nzchar(answers))) {
         return(say("fill in the blank choice."))
@@ -189,8 +197,7 @@ edit_variable_items <- function(snap, q, placement, variables) {
     add(table, identifier, "Insert", column, NA, value)
     token
   }
-  answer_option_for <- function(words) {
-    normal <- normal_answer(words)
+  answer_option_for <- function(normal) {
     rows <- snap$answer_option[snap$answer_option$standardized_label %in% normal, , drop = FALSE]
     find_or_add("answer_option", rows, "standardized_label", normal)
   }
@@ -215,8 +222,9 @@ edit_variable_items <- function(snap, q, placement, variables) {
     if (!closed) add("variable", here, "Insert", "answer_data_type", NA, edit_variable_text(box$answer_data_type))
     if (closed) {
       choices <- box$response_options %||% list()
+      answers <- edit_choice_answers(choices)
       for (j in seq_along(choices)) {
-        choice <- edit_identifier(list(answer_option_id = answer_option_for(choices[[j]]$answer_option), variable_key = token))
+        choice <- edit_identifier(list(answer_option_id = answer_option_for(answers[j]), variable_key = token))
         add("response_option", choice, "Insert", "display_order", NA, j)
         add("response_option", choice, "Insert", "code_value", NA, edit_variable_text(choices[[j]]$code_value))
       }

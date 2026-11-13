@@ -244,6 +244,37 @@ test_that("an upload is kept in Storage and on this server, named by its hash, a
   expect_equal(extraction_model_sha256(upload$datapath), digest::digest(file = upload$datapath, algo = "sha256"))
 })
 
+test_that("a PDF's pages are counted from its page tree, not from the page objects an edit leaves behind", {
+  # A PDF saved again after an edit (a redaction) keeps the old copies of the pages it changed, so it holds more
+  # page objects than pages; and most PDFs pack the page tree into a compressed object stream.
+  pdf_of <- function(...) {
+    path <- withr::local_tempfile(fileext = ".pdf", .local_envir = parent.frame())
+    con <- file(path, "wb")
+    for (part in list(...)) writeBin(if (is.character(part)) charToRaw(part) else part, con)
+    close(con)
+    path
+  }
+  page <- function(n) sprintf("%d 0 obj\n<< /Type /Page /Parent 1 0 R >>\nendobj\n", n)
+  pages <- paste(vapply(2:4, page, ""), collapse = "") # three page objects: one is an old copy
+
+  in_plain_view <- pdf_of("%PDF-1.4\n1 0 obj\n<< /Type /Pages /Kids [2 0 R 3 0 R] /Count 2 >>\nendobj\n", pages, "%%EOF\n")
+  expect_equal(extraction_model_page_count(in_plain_view), 2)
+
+  tree <- memCompress(charToRaw("1 0 5 60 << /Type /Catalog /Pages 5 0 R >> << /Count 2 /Kids [2 0 R 3 0 R] /Type /Pages >>"), "gzip")
+  packed <- pdf_of(
+    "%PDF-1.6\n", pages, sprintf("9 0 obj\n<< /Type /ObjStm /N 2 /First 8 /Filter /FlateDecode /Length %d >>\nstream\r\n", length(tree)),
+    tree, "\r\nendstream\nendobj\n%%EOF\n"
+  )
+  expect_equal(extraction_model_page_count(packed), 2)
+
+  # a tree of trees: the whole is the largest count
+  nested <- pdf_of("%PDF-1.4\n<< /Type /Pages /Count 7 >> << /Type /Pages /Count 2 >> << /Type /Pages /Count 5 >>\n", pages)
+  expect_equal(extraction_model_page_count(nested), 7)
+
+  # with no page tree to be found, the page objects are counted, as before
+  expect_equal(extraction_model_page_count(pdf_of("%PDF-1.4\n", pages)), 3)
+})
+
 test_that("a file that isn't a PDF is recognised, and a CSV is read as text", {
   csv <- fake_csv_upload(c("AH01", "AH02"))
   expect_false(extraction_model_is_pdf(csv$datapath))

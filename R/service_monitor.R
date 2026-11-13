@@ -222,10 +222,10 @@ monitor_period_label <- function(starts, unit) {
 # none as nought.
 # records: From `monitor_service_get_all()`.
 # unit: `"day"`, `"week"` or `"month"`; by default, by how long the extractions span (`monitor_period_unit()`).
-# tz: The time zone whose days count (the site shows times in local time).
+# tz: The time zone whose days count: the site's.
 # Returns: A data frame with `start` (Date), `label`, `extractions` and `corrections`, oldest first, and the
 #   unit as its attribute `unit`; no rows if there are no records.
-monitor_service_over_time <- function(records, unit = NULL, tz = "") {
+monitor_service_over_time <- function(records, unit = NULL, tz = site_time_zone) {
   applied <- parse_time(vapply(records, function(record) record$applied %||% NA_character_, character(1)))
   counts <- vapply(records, function(record) length(record$edits %||% list()), numeric(1))
   keep <- !is.na(applied)

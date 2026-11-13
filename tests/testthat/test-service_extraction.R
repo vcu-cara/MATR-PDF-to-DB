@@ -262,6 +262,14 @@ test_that("a recorded wave has to be the questionnaire's, ask no questions yet (
     "^You already have a draft going into Wave 2"
   )
   expect_null(extraction_service_recorded_wave_problem(info, catalog, records = other, id = "other"))
+  # a draft reopened from the wave replaces what the wave asks, so the wave's questions aren't in its way...
+  reopened <- list(mine = list(id = "mine", status = "Draft", prepared_by_id = 9L, info = c(info, list(updates_wave_id = "2"))))
+  expect_null(extraction_service_recorded_wave_problem(info, catalog, question_counts = c("2" = 12L), records = reopened, id = "mine"))
+  # ...but they are once it is pointed at another wave that asks questions
+  expect_match(
+    extraction_service_recorded_wave_problem(picked_info(wave_id = "1"), catalog, question_counts = c("1" = 3L), records = reopened, id = "mine"),
+    "Wave 1 already asks 3 questions"
+  )
   # no wave picked yet: nothing to check
   expect_null(extraction_service_recorded_wave_problem(picked_info(wave_id = ""), catalog))
   # every wave of the questionnaire is offered, saying whether it asks questions yet

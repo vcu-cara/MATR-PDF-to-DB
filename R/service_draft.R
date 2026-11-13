@@ -75,7 +75,8 @@ cant_hold_message <- function(outer) {
 # dash as a hyphen, abbreviations in full (answer_abbreviations), and a choice printed as "?" as "uncertain" (what
 # the forms that print it say it means). What qualifies a choice comes after it in brackets (answer_qualified()), so
 # the choices that share an answer are found together. The database checks less (private.normal_answer()), so
-# what this gives always passes.
+# what this gives always passes. A letter that is a whole choice is left as it is: what "F" stands for depends on
+# the choices beside it (sexes_written_out()).
 #
 # The printed words aren't needed: the dashboard links each questionnaire's PDF, and the database is a guide to
 # finding questions, not a copy of the page.
@@ -91,11 +92,19 @@ normal_answer <- function(text) {
   for (short in names(answer_abbreviations)) {
     text <- gsub(paste0("(?<![[:alnum:]/])", short, "(?![[:alnum:]/])"), answer_abbreviations[[short]], text, perl = TRUE)
   }
-  whole <- text %in% names(answer_letters)
-  text[whole] <- answer_letters[text[whole]]
   text <- answer_qualified(sub("[.:[:space:]]+$", "", text))
   text[!is.na(text) & !nzchar(text)] <- NA
   text
+}
+
+# One variable's choices with the letters that stand for a sex written out: "M" and "F" are "male" and "female"
+# where the sexes are all the variable offers ("M / F", "Male / F"). Beside any other choice a letter is itself:
+# "F" after "D-" is a grade, and "M" before "T" a day of the week.
+# answers: The variable's choices, each as `normal_answer()` gives it.
+sexes_written_out <- function(answers) {
+  letter <- answers %in% names(answer_letters)
+  if (all(letter | answers %in% answer_letters | is.na(answers))) answers[letter] <- answer_letters[answers[letter]]
+  answers
 }
 
 # Curly quotes as straight ones ("Respondent’s Siblings" is "Respondent's Siblings"), so words and names typed or
@@ -127,7 +136,7 @@ number_words <- c(
 )
 
 # Abbreviations written out wherever they are whole words in a choice ("R first" is "respondent first", as TSA
-# uses "R"), and letters that are a whole choice ("M" is "male").
+# uses "R"), and the letters that are a whole choice where a variable's choices are the sexes ("M" is "male").
 answer_abbreviations <- c(
   r = "respondent", dk = "don't know", hh = "household", "n/a" = "not applicable",
   hrs = "hours", hr = "hour", mins = "minutes", wks = "weeks", wk = "week", mos = "months", yrs = "years", yr = "year"
@@ -137,15 +146,20 @@ answer_letters <- c(m = "male", f = "female")
 # Units printed by a write-in's box, written out (with answer_abbreviations' "yrs", "hrs" and the rest).
 unit_abbreviations <- c(lbs = "pounds", lb = "pounds", ozs = "ounces", oz = "ounces", ft = "feet", kgs = "kilograms", kg = "kilograms", cm = "centimeters")
 
+# What makes a unit a rate: "per day", "/week", "a week", "each day" at its end.
+unit_rate <- "\\s*(?:/|\\bper\\b|\\b(?:a|an|each|every)\\b)\\s*(?:day|week|month|year|hour|night|occasion|time)s?[.:]*$"
+
 # The unit a write-in's number is in, written one way.
 # Lower case, abbreviations written out and no full stop at the end ("yrs." is "years", "LBS" is "pounds"), so the
 # answers in the same unit are found together across forms, and the forms in other units ("pounds" and
-# "kilograms") can be told apart.
+# "kilograms") can be told apart. A unit is what is counted, never a rate: "cigarettes per day", "hrs/day" and
+# "times a week" are "cigarettes", "hours" and "times", and how often is left to the question's words.
 # text: Units as printed or typed.
 # Returns: The units, with `NA` for a blank.
 normal_unit <- function(text) {
   text <- squish(normal_text(as.character(text)))
   text <- sub("[.:]+$", "", text)
+  text <- sub(unit_rate, "", text, perl = TRUE)
   for (short in names(c(answer_abbreviations, unit_abbreviations))) {
     long <- c(answer_abbreviations, unit_abbreviations)[[short]]
     text <- gsub(paste0("(?<![[:alnum:]/])", short, "(?![[:alnum:]/])"), long, text, perl = TRUE)
@@ -195,7 +209,7 @@ answer_qualified <- function(text) {
 # "for" (so "on the last day you smoked" isn't one); a field that holds only a time frame can leave that out ("past
 # week"). `normal_time_frame()` writes each of them one way.
 time_frame_unit <- "(day|week|month|year)s?"
-time_frame_lifetime <- "(?:ever\\s+)?(?:in|during|over|throughout)\\s+your\\s+(?:entire\\s+|whole\\s+)?life(?:time)?"
+time_frame_lifetime <- "(?:ever\\s+)?(?:in|during|over|throughout)\\s+(?:your|his|her|their|my)\\s+(?:entire\\s+|whole\\s+)?life(?:time)?"
 time_frame_past <- paste0(
   "(?:the\\s+)?(?:past|last|previous)\\s+(?:([0-9]+|", paste(number_words, collapse = "|"), ")\\s+)?", time_frame_unit
 )
@@ -206,9 +220,10 @@ time_frame_pattern <- paste0("(?:", time_frame_lifetime, "|", time_frame_preposi
 # The time a variable's answer is about, as the database keeps it (a tag), so the questions about the same time are
 # found together whatever words the forms use: "lifetime" ("in your life", "during your whole lifetime"), and
 # "past" a number of days, weeks, months or years, the number in words up to nine and in figures from ten
-# ("during the last 12 months" and "over the past twelve months" are "past 12 months"; "in the last year" is "past
-# year"; "within the last 6 weeks" is "past six weeks"). Any other is kept as typed, in lower case ("since your
-# last birthday").
+# ("within the last 6 weeks" is "past six weeks", "in the last 14 days" is "past 14 days"). A year and a month are
+# each one tag, whatever the form calls them: "during the last 12 months", "over the past twelve months" and "in
+# the last year" are "past year", and "in the last 30 days" and "over the past month" are "past month". Any other
+# is kept as typed, in lower case ("since your last birthday").
 # text: Time frames as printed or typed.
 # Returns: The time frames, with `NA` for a blank.
 normal_time_frame <- function(text) {
@@ -232,7 +247,70 @@ time_frame_words <- function(found) {
   count <- tolower(past[2])
   count <- if (!nzchar(count)) 1L else if (count %in% number_words) match(count, number_words) else as.integer(count)
   unit <- tolower(past[3])
+  same_span <- c("12 month" = "year", "30 day" = "month") # 12 months are a year, and 30 days a month
+  if (paste(count, unit) %in% names(same_span)) {
+    unit <- same_span[[paste(count, unit)]]
+    count <- 1L
+  }
   if (count == 1) paste("past", unit) else paste("past", if (count < 10) number_words[count] else count, paste0(unit, "s"))
+}
+
+# ------ Where a tag sits ---------------------------------------------------------------------------------
+# A tag says who an answer is about (`subject`), when (`time_frame`) or, for a write-in, what its number is in
+# (`unit`). Who and when can be said of a whole question ("have you smoked?" [lifetime]) or of one of its variables
+# (the same question's answers for [twin a] and [twin b], or for [lifetime] and [past year]); a unit is always
+# a variable's. Each is said once: on the question when it is about all of it, on each variable when the question's
+# variables differ (`draft_service_place_tags()`). The words a tag stands for are left out of the question's words, so the same question
+# asked about another time or person is the same component, told apart by its tags.
+question_tag_fields <- c("subject", "time_frame")
+
+# Put a draft's tags where they belong.
+# Who (or when) each variable is about is its own tag or, when it has none, its question's. When that is the same
+# for every variable of a question, it is the question's tag and no variable has one; when the variables differ,
+# each has its own and the question has none. So a kind of tag is never on a question and on its variables at
+# once. A variable's label that only says one of its tags again is left out (`label_repeats_tag()`), and tags on
+# anything but a question or a variable are dropped. Done when a draft is opened and when it is saved, never as a
+# tag is typed (half a word would move).
+# Returns: The draft; placing it twice changes nothing more.
+draft_service_place_tags <- function(draft) {
+  blocks <- draft$components
+  boxes <- draft$variables
+  of_question <- match(boxes$component_id, blocks$id)
+  for (kind in question_tag_fields) {
+    blocks[[kind]][blocks$component_type != "Question"] <- NA
+    about <- ifelse(is.na(boxes[[kind]]), blocks[[kind]][of_question], boxes[[kind]])
+    alike <- as.logical(ave(seq_along(about), of_question, FUN = function(rows) length(unique(about[rows])) == 1))
+    asked <- unique(of_question)
+    blocks[[kind]][asked] <- NA
+    blocks[[kind]][of_question[alike]] <- about[alike]
+    boxes[[kind]] <- ifelse(alike, NA_character_, about)
+  }
+  repeats <- label_repeats_tag(boxes$label, list(
+    subject = boxes$subject, time_frame = boxes$time_frame, unit = boxes$unit,
+    question_subject = blocks$subject[of_question], question_time_frame = blocks$time_frame[of_question]
+  ))
+  boxes$label[repeats] <- NA
+  draft$components <- blocks
+  draft$variables <- boxes
+  draft
+}
+
+# Whether each label only says again what a tag says: the tag's own words, give or take the little words around
+# them ("Mother" of the subject "mother", "your spouse/partner" of "spouse/partner", "ever in his lifetime" of
+# "lifetime", "in the past 12 months" of "past year", "yrs." of "years"), or the respondent ("yourself") when
+# the variable is about them. A label that says more ("mother's age") doesn't.
+# labels: The variables' labels.
+# tags: A list of the tags each variable has (its own and its question's), each a vector as long as `labels`.
+label_repeats_tag <- function(labels, tags) {
+  words <- function(text) sub("^(?:(?:the|your|his|her|their|my) )+", "", squish(normal_text(as.character(text))), perl = TRUE)
+  said <- words(labels)
+  forms <- list(said, words(normal_subject(labels)), normal_time_frame(labels), normal_unit(labels))
+  repeats <- rep(FALSE, length(labels))
+  for (tag in tags) {
+    for (form in forms) repeats <- repeats | (!is.na(form) & !is.na(tag) & form == words(tag))
+  }
+  about_respondent <- is.na(tags$subject) & is.na(tags$question_subject)
+  repeats | (about_respondent & said %in% c(respondent_names, "you", "yourself", "me", "myself"))
 }
 
 # Whether blocks of these kinds hold other blocks.
@@ -280,7 +358,12 @@ new_row_defaults <- list(
     id = NA_character_, parent_id = NA_character_, display_order = Inf,
     component_type = NA_character_, text = NA_character_,
     question_number = NA_character_, printed_number = NA_character_,
-    parent_question_id = NA_character_, checked = FALSE, ref = NA_character_, page = NA_integer_
+    parent_question_id = NA_character_, checked = FALSE, ref = NA_character_, page = NA_integer_,
+    subject = NA_character_, time_frame = NA_character_,
+    # for an extraction reopened from the catalog (`extraction_service_reopen_wave()`): the component the block
+    # came from (the JSON's `component_id`), and "everywhere" when its new words are to replace that component's
+    # wherever it is printed, not only here (see `private.reword_components()` in sql/4_functions.sql)
+    catalog_id = NA_character_, reword = NA_character_
   ),
   variables = data.frame(
     id = NA_character_, component_id = NA_character_, display_order = Inf,
@@ -376,7 +459,11 @@ draft_service_from_json <- function(json) {
       parent_question_id = find_parent_questions(parent_by, pluck(blocks, "parent_question"), block_ids),
       checked = pluck(blocks, "checked", FALSE),
       ref = refs(blocks, block_ids),
-      page = pluck(blocks, "page", NA_integer_)
+      page = pluck(blocks, "page", NA_integer_),
+      subject = normal_subject(pluck(blocks, "subject")),
+      time_frame = normal_time_frame(pluck(blocks, "time_frame")),
+      catalog_id = pluck(blocks, "component_id"),
+      reword = pluck(blocks, "reword")
     ),
     variables = data.frame(
       id = ids_for("v", seq_along(boxes)),
@@ -395,14 +482,16 @@ draft_service_from_json <- function(json) {
       id = ids_for("o", seq_along(choices)),
       variable_id = ids_for("v", pluck(choices, ".parent", NA_integer_)),
       display_order = as.numeric(seq_along(choices)),
-      answer_option = normal_answer(pluck(choices, "answer_option")),
+      answer_option = ave(normal_answer(pluck(choices, "answer_option")), pluck(choices, ".parent", NA_integer_), FUN = sexes_written_out),
       code_value = pluck(choices, "code_value"), # text: a code can be a letter (a, b, c)
       ref = refs(choices, ids_for("o", seq_along(choices)))
     )
   )
   # Rows were numbered in printed order; make that 1, 2, 3... within each parent.
   for (table in names(parent_columns)) draft <- renumber(draft, table)
-  draft_service_renumber_questions(default_codes(draft))
+  draft <- draft_service_place_tags(draft_service_renumber_questions(default_codes(draft)))
+  # the AI's answer asks about each of several people in turn; staff's copy is as they left it
+  if (reviewed) draft else draft_service_join_repeats(draft)
 }
 
 # Every block in the order a respondent meets it.
@@ -457,9 +546,13 @@ find_parent_questions <- function(numbers, parent_numbers, ids) {
   }, "")
 }
 
+# Whether each of `numbers` is the printed number `number`. A question joined from several (the same question
+# about twin A and twin B: "8, 24") has each of their numbers, and is found by any of them.
 same_number <- function(numbers, number) {
-  !is.na(numbers) & !is.na(number) &
-    tolower(trimws(numbers)) == tolower(trimws(number))
+  wanted <- tolower(trimws(number))
+  vapply(strsplit(tolower(as.character(numbers)), ",", fixed = TRUE), function(own) {
+    !is.na(wanted) && !anyNA(own) && wanted %in% trimws(own)
+  }, logical(1))
 }
 
 # ------ Tables to JSON ---------------------------------------------------------
@@ -469,6 +562,7 @@ same_number <- function(numbers, number) {
 # (`parent_question`) by that question's place among the questions.
 # Fields with nothing in them are left out, as in tests/testthat/fixtures/gna_gold.json.
 draft_service_to_json <- function(draft) {
+  draft <- draft_service_place_tags(draft) # each tag said once, where it belongs
   list(
     schema_version = draft_schema_version,
     questionnaire = draft$questionnaire,
@@ -491,10 +585,14 @@ blocks_json <- function(draft, parent_id) {
       json$question_number <- block$question_number
       json$printed_number <- block$printed_number
       json$parent_question <- question_number_of(draft, block$parent_question_id)
+      json$subject <- block$subject
+      json$time_frame <- block$time_frame
       json$variables <- boxes_json(draft, block$id)
     }
     json$checked <- block$checked
     json$ref <- block$ref
+    json$component_id <- block$catalog_id
+    json$reword <- block$reword
     without_blanks(json)
   })
 }

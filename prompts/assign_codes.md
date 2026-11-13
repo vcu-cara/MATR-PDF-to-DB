@@ -13,6 +13,7 @@ Each variable has:
 - `text`: the question's words. For a battery, the lead-in shared by its items.
 - `label`: what this variable records within the question (one item of a battery, one box of a check-all list, one column of a grid), if the question records more than one thing.
 - `about`: who the answer is about (the respondent's mother, father, siblings), if not the respondent.
+- `when`: the time the answer is about ("lifetime", "past year"), if the question names one. The question's `text` leaves the time out.
 - `choices`: its answer choices, if it has any, each with its own `id` (`o1`, `o2`, ...) and `answer` (the choice's standard wording, in lower case). A variable without choices is written in (a number, a date, words).
 
 They are in the order the questionnaire prints them, which is usually the order the file lists them in too. You may be given only some of the questionnaire's variables: give names and codes for those.
@@ -31,6 +32,7 @@ Codebooks are messy. Expect all of this:
 ## How to match
 
 - Match a variable to an entry by meaning: the question's wording and the variable's `label` against the entry's wording. Files shorten and reword questions ("In past 6 months, how often were you involved in school sports or athletics" for an item "School sports or athletics" under the lead-in "In the past 6 months, how often were you involved in the following activities?").
+- Use `when` to tell apart entries that differ only by the time they are about: "in your lifetime", "in the last 12 months" and "in the last 30 days" versions of the same question are separate variables, often with names that differ by a last letter (`mq50a`, `mq50b`, `mq50c`).
 - Use `about` to tell apart entries that differ only by whom they are about: "(mother)" and "(father)" versions of the same item are separate variables, often with names that differ by a last digit (`kq15e1` for the mother, `kq15e2` for the father). Give the mother's name to the variable about the mother.
 - A variable name often carries the question's number (`kq12b`, `AH12B`). Use that only to confirm a match, never against the wording.
 - Match each choice to its code by the category with the same meaning, not by position. Some variables are **reverse coded** (often named with `_r`): their codes run the other way ("not at all" = 3 … "a lot" = 0), and each choice must get its own category's code. Copy each code exactly as the file prints it: `1`, `0`, `-9`, `a`, `B`.

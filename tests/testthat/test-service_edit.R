@@ -225,7 +225,7 @@ test_that("a registry's name, and a study's name in its registry, can't be added
 })
 
 test_that("a tag's name is written its kind's way, and is in its kind's list once", {
-  expect_equal(edit_tag_name("time frame", "During the last 12 months"), "past 12 months")
+  expect_equal(edit_tag_name("time frame", "During the last 12 months"), "past year")
   expect_equal(edit_tag_name("subject", "Respondent’s Twin"), "twin")
   expect_equal(edit_tag_name("unit", "Lbs"), normal_unit("Lbs"))
   taken <- form_for("tag", "add", tag__kind = "subject", tag__name = " respondent’s family ")
@@ -236,6 +236,70 @@ test_that("a tag's name is written its kind's way, and is in its kind's list onc
   # a tag may keep its own name
   same <- form_for("tag", "update", "1", tag__name = "RESPONDENT")
   expect_length(edit_service_check(same$fields, same$values)$problems, 0)
+})
+
+# A catalog where things carry "past 12 months" (tag 13) and one of them "past year" (tag 12) as well.
+tagged_snapshot <- function(entity = edit_entities$tag) {
+  test_snapshot(edit_service_tables(entity), function(snap) {
+    snap$variable_tag <- rbind(snap$variable_tag, data.frame(variable_key = c(1, 2, 2), tag_id = c(13, 13, 12)))
+    snap$placement_tag <- rbind(snap$placement_tag, data.frame(placement_id = 209, tag_id = 13))
+    snap
+  })
+}
+
+test_that("renaming a tag to the name of another of its kind merges it into that one", {
+  form <- form_for("tag", "update", "13", snap = tagged_snapshot(), tag__name = "Past Year")
+  found <- edit_service_check(form$fields, form$values)
+  expect_length(found$problems, 0) # not refused, as a new tag with that name is
+  expect_equal(found$warnings$tag__name, paste(
+    "“past year” is already in the list of time frames. Saving merges this tag into it:",
+    "1 tag on a question and 2 tags on variables move to “past year”, and “past 12 months” is removed."
+  ))
+  built <- form_items(form)
+  # what carries the tag carries the other instead, once (variable 2 has it already), and the tag goes
+  expect_equal(item_lines(built$items), c(
+    'Delete placement_tag {"placement_id":209,"tag_id":13} NA: - -> -',
+    'Insert placement_tag {"placement_id":209,"tag_id":12} NA: - -> -',
+    'Delete variable_tag {"tag_id":13,"variable_key":1} NA: - -> -',
+    'Insert variable_tag {"tag_id":12,"variable_key":1} NA: - -> -',
+    'Delete variable_tag {"tag_id":13,"variable_key":2} NA: - -> -',
+    'Delete tag {"tag_id":13} kind: time frame -> -',
+    'Delete tag {"tag_id":13} name: past 12 months -> -'
+  ))
+  expect_equal(built$summary, "Merged the tag “past 12 months” into “past year”, moving 1 tag on a question and 2 tags on variables")
+  expect_equal(built$merge[c("from", "into_name", "key")], list(from = "past 12 months", into_name = "past year", key = "12"))
+
+  # a tag nothing carries is only removed
+  unused <- form_for("tag", "update", "16", tag__name = "past month")
+  expect_match(edit_service_check(unused$fields, unused$values)$warnings$tag__name, "nothing carries “past 30 days”, so it is only removed", fixed = TRUE)
+  expect_equal(item_lines(form_items(unused)$items), c('Delete tag {"tag_id":16} kind: time frame -> -', 'Delete tag {"tag_id":16} name: past 30 days -> -'))
+  expect_equal(form_items(unused)$summary, "Merged the tag “past 30 days” into “past month”")
+
+  # a name no other tag of its kind has is a rename, as before, and so is the name of a tag of another kind
+  renamed <- form_for("tag", "update", "13", tag__name = "past two years")
+  expect_null(edit_service_check(renamed$fields, renamed$values)$warnings$tag__name)
+  expect_equal(item_lines(form_items(renamed)$items), 'Update tag {"tag_id":13} name: past 12 months -> past two years')
+  expect_null(form_items(renamed)$merge)
+})
+
+test_that("a tag kept under a name the site now writes another way can be saved in that way, but isn't changed untouched", {
+  # "past 30 days" is written "past month" now; with no "past month" in the list, retyping it is a rename
+  only_old <- function(snap) {
+    snap$tag <- snap$tag[snap$tag$name != "past month", , drop = FALSE]
+    snap
+  }
+  snap <- test_snapshot(edit_service_tables(edit_entities$tag), only_old)
+  retyped <- form_for("tag", "update", "16", snap = snap, tag__name = "past month")
+  expect_length(edit_service_check(retyped$fields, retyped$values)$problems, 0)
+  expect_equal(edit_service_changes(retyped$fields, retyped$initial, retyped$values)[c("old_value", "new_value")], data.frame(old_value = "past 30 days", new_value = "past month"))
+  expect_equal(item_lines(form_items(retyped)$items), 'Update tag {"tag_id":16} name: past 30 days -> past month')
+
+  # opened and left alone, it has no change, no problem and no talk of merging, though its name is another tag's
+  untouched <- form_for("tag", "update", "13", snap = tagged_snapshot())
+  expect_equal(nrow(edit_service_changes(untouched$fields, untouched$initial, untouched$values)), 0)
+  found <- edit_service_check(untouched$fields, untouched$values)
+  expect_length(c(found$problems, found$warnings), 0)
+  expect_equal(NROW(form_items(untouched)$items), 0)
 })
 
 test_that("an answer choice is kept in its normal form, once", {
@@ -332,6 +396,7 @@ test_that("values are saved tidied", {
   expect_equal(edit_service_normalize(edit_field("x", "X", "date"), "04/15/2022"), "2022-04-15")
   expect_equal(edit_service_normalize(edit_field("x", "X", "several", choices = c(a = "1", b = "2")), "2, 1"), "1,2")
   expect_equal(edit_service_normalize(edit_field("x", "X", normalize = normal_answer), "Yes?"), "yes")
+  expect_equal(edit_service_normalize(edit_field("x", "X", normalize = normal_answer), "F"), "f") # a grade, as much as a sex
   expect_equal(edit_display_value(edit_field("x", "X", "date"), "2022-04-15"), "04/15/2022")
   expect_equal(edit_display_value(edit_field("x", "X", "several", choices = c(Yes = "1", No = "2")), "1,2"), "Yes / No")
   expect_equal(edit_display_value(edit_field("x", "X"), NA), "(empty)")

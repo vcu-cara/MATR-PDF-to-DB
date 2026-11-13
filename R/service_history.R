@@ -77,7 +77,8 @@ history_service_count_lines <- function(details) {
   counts <- counts[order(names(counts) != "questions")] # questions first, the rest as recorded
   # a push counts rows by table ("variable_new"); an emptying counts what went ("variables_removed")
   nouns <- c(component = "components", placement = "placements", wave_question = "questions asked", variable = "variables",
-             response_option = "response options", answer_option = "answer options", tag = "tags")
+             response_option = "response options", answer_option = "answer options", tag = "tags",
+             question = "questions", option_set = "option sets")
   words <- function(name) gsub("_", " ", if (name %in% names(nouns)) nouns[[name]] else name)
   vapply(names(counts), function(name) {
     label <- if (grepl("_new$", name)) {

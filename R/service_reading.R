@@ -102,12 +102,44 @@ reading_service_read <- function(pdf_path, lookups, progress = function(status) 
   best
 }
 
-# The JSON object in Gemini's answer, which may come wrapped in a ```json fence.
+# The JSON object in Gemini's answer, which may come wrapped in a ```json fence. Closing a deep nest written on
+# one line, Gemini sometimes writes a bracket too many at the very end; what follows the object's own last
+# brace is left off, so that one slip doesn't lose the whole reading.
 json_in <- function(text) {
   start <- regexpr("{", text, fixed = TRUE)
   ends <- gregexpr("}", text, fixed = TRUE)[[1]]
   if (start < 0 || max(ends) < start) stop("There's no JSON object in the answer.", call. = FALSE)
-  jsonlite::fromJSON(substr(text, start, max(ends)), simplifyVector = FALSE)
+  json <- substr(text, start, max(ends))
+  tryCatch(jsonlite::fromJSON(json, simplifyVector = FALSE), error = function(problem) {
+    end <- json_object_end(json)
+    if (is.na(end) || end == nchar(json)) stop(problem)
+    jsonlite::fromJSON(substr(json, 1, end), simplifyVector = FALSE)
+  })
+}
+
+# Where the object that `json` opens with closes: the place of the brace that balances its first, not counting
+# the braces and brackets inside strings. `NA` if it never closes.
+json_object_end <- function(json) {
+  chars <- strsplit(json, "", fixed = TRUE)[[1]]
+  depth <- 0L
+  in_string <- FALSE
+  escaped <- FALSE
+  for (i in seq_along(chars)) {
+    char <- chars[i]
+    if (in_string) {
+      if (escaped) escaped <- FALSE else if (char == "\\") escaped <- TRUE else if (char == '"') in_string <- FALSE
+    } else if (char == '"') {
+      in_string <- TRUE
+    } else if (char == "{" || char == "[") {
+      depth <- depth + 1L
+    } else if (char == "}" || char == "]") {
+      depth <- depth - 1L
+      if (depth == 0L) {
+        return(i)
+      }
+    }
+  }
+  NA_integer_
 }
 
 # The first page of each page range, in the order the requests are sent.
@@ -190,9 +222,10 @@ reading_service_instructions <- function(lookups, prompt_path = reading_prompt_p
   lists <- list(
     component_types = quoted(lookups$component_types),
     subjects = quoted(lookups$subjects),
-    # a database without the list yet still shows the form they take
-    time_frames = quoted(if (length(lookups$time_frames)) lookups$time_frames else c("lifetime", "past 12 months", "past 30 days")),
-    units = quoted(if (length(lookups$units)) lookups$units else c("years", "pounds")),
+    # a database without the list yet still shows the form they take; and each is shown as the site writes it now,
+    # so a tag kept under an older name ("past 12 months", "cigarettes per day") isn't offered
+    time_frames = quoted(as_written(normal_time_frame, lookups$time_frames, c("lifetime", "past year", "past month"))),
+    units = quoted(as_written(normal_unit, lookups$units, c("years", "pounds"))),
     answer_data_types = quoted(lookups$answer_data_types),
     answer_options = paste0("  - ", lookups$answer_options, collapse = "\n")
   )
@@ -200,6 +233,13 @@ reading_service_instructions <- function(lookups, prompt_path = reading_prompt_p
     prompt <- gsub(paste0("{{", name, "}}"), lists[[name]], prompt, fixed = TRUE)
   }
   prompt
+}
+
+# A lookup list's names as `normal` writes them, each once; `otherwise` for an empty list.
+as_written <- function(normal, names, otherwise) {
+  names <- unique(normal(names))
+  names <- names[!is.na(names)]
+  if (length(names) > 0) names else otherwise
 }
 
 # Changes whenever the prompt or a lookup list does, so each draft says which
@@ -213,7 +253,8 @@ reading_service_prompt_version <- function(instructions) {
 # of block has (in tests/testthat/fixtures/gna_gold.json's order, leaving out empty ones; what the prompt
 # no longer asks for, such as routing, is dropped), and tidies the text: one space between words, straight
 # quotes, and the form's words in lower case (normal_text()). A block put inside one that isn't a section or
-# group moves out to sit straight after it. A variable about the respondent has no subject.
+# group moves out to sit straight after it, and a section or grid recorded twice in a row is one. A variable
+# about the respondent has no subject.
 reading_service_tidy <- function(reading) {
   list(
     questionnaire = without_blanks(list(
@@ -225,7 +266,7 @@ reading_service_tidy <- function(reading) {
 }
 
 tidy_blocks <- function(blocks) {
-  blocks <- lift_misplaced_children(blocks)
+  blocks <- join_repeated_containers(lift_misplaced_children(blocks))
   lapply(seq_along(blocks), function(i) {
     block <- blocks[[i]]
     type <- block$component_type
@@ -245,9 +286,30 @@ tidy_blocks <- function(blocks) {
       page = block$page,
       printed_number = clean_number(block$printed_number),
       parent_question = clean_number(block$parent_question),
+      subject = normal_subject(clean_text(block$subject) %||% NA),
+      time_frame = tidy_time_frame(block$time_frame),
       variables = tidy_boxes(block$variables)
     ))
   })
+}
+
+# A Section or Grid recorded twice in a row with the same words is one: its questions ran onto the next page, and
+# it was started again without being marked as carrying on. The second's blocks carry on the first's.
+join_repeated_containers <- function(blocks) {
+  words <- function(block) normal_text(clean_text(block$text))
+  joined <- list()
+  for (block in blocks) {
+    last <- length(joined)
+    carries_on <- last > 0 && block$component_type %in% c("Section", "Grid") &&
+      identical(joined[[last]]$component_type, block$component_type) &&
+      !is.null(words(block)) && identical(words(joined[[last]]), words(block))
+    if (carries_on) {
+      joined[[last]]$children <- c(joined[[last]]$children, block$children)
+    } else {
+      joined[[last + 1]] <- block
+    }
+  }
+  joined
 }
 
 lift_misplaced_children <- function(blocks) {
@@ -281,13 +343,9 @@ tidy_boxes <- function(boxes) {
 # so it isn't a response option, and is left out.
 tidy_choices <- function(choices) {
   choices <- Filter(function(choice) !isFALSE(choice[["printed"]]), choices)
-  lapply(seq_along(choices), function(i) {
-    choice <- choices[[i]]
-    without_blanks(list(
-      display_order = i,
-      answer_option = normal_answer(clean_text(choice$answer_option) %||% NA)
-    ))
-  })
+  answers <- vapply(choices, function(choice) clean_text(choice$answer_option) %||% NA_character_, character(1))
+  answers <- sexes_written_out(normal_answer(answers))
+  lapply(seq_along(choices), function(i) without_blanks(list(display_order = i, answer_option = answers[i])))
 }
 
 # The time a box's answer is about, written one way (normal_time_frame()); NULL for none.
@@ -308,6 +366,10 @@ clean_text <- function(text) {
     return(NULL)
   }
   text <- gsub("…", "...", straight_quotes(text))
+  # Words quoted with single marks ('butt in') are quoted with double ones, as the forms print them: Gemini writes
+  # either, and two copies of a question must read alike to be joined. A mark after a letter (twins', don't) is an
+  # apostrophe, not the start of a quotation.
+  text <- gsub("(?<![[:alnum:]'])'([^']*[[:alnum:]][^']*)'(?![[:alnum:]])", '"\\1"', text, perl = TRUE)
   text <- squish(text)
   if (nzchar(text)) text
 }
@@ -331,8 +393,10 @@ reading_service_problems <- function(json, lookups) {
   problems <- draft_service_check(draft, lookups, matr_ids = FALSE) # Gemini never reads MATR IDs
   where <- match(problems$id, blocks$id)
   # A parent named by a number no question has is dropped on loading, so the
-  # checks never see it.
-  parent_numbers <- pluck(flatten_blocks(json$components), "parent_question")
+  # checks never see it. Each block of the draft is found in the reading by its ref (its place in the reading):
+  # the draft has fewer blocks when questions about each of several people were joined.
+  read <- flatten_blocks(json$components)
+  parent_numbers <- pluck(read, "parent_question")[match(blocks$ref, ids_for("c", seq_along(read)))]
   lost <- which(!is.na(parent_numbers) & is.na(blocks$parent_question_id))
   empty <- is_container(blocks$component_type) & !blocks$id %in% blocks$parent_id
   c(
@@ -394,7 +458,8 @@ reading_service_assign <- function(json, supplement, generate = gemini_model_gen
 }
 
 # Each variable of a reading, in printed order, with the ids the assigning prompt names it and its choices by,
-# and what helps find it in the file: its question's printed number and words, its label, who it is about.
+# and what helps find it in the file: its question's printed number and words, its label, and who and when it
+# is about (its own tag, or else its question's).
 assign_variables <- function(json) {
   found <- list()
   n_box <- 0
@@ -409,7 +474,8 @@ assign_variables <- function(json) {
         })
         found[[length(found) + 1]] <<- without_blanks(list(
           id = paste0("v", n_box), question = block$printed_number, text = block$text, label = box$label,
-          about = box$subject, choices = if (length(choices) > 0) choices
+          about = box$subject %||% block$subject, when = box$time_frame %||% block$time_frame,
+          choices = if (length(choices) > 0) choices
         ))
       }
       walk(block$children)

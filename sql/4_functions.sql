@@ -5,7 +5,7 @@
 --
 --   4a. Rules a constraint can't express        triggers on the tables
 --   4b. Helpers                                 private.*: not reachable through the REST API
---   4c. What the site calls (through /rpc/)     public.push_extraction, apply_change, empty_*
+--   4c. What the site calls (through /rpc/)     public.push_extraction, reopen_wave, apply_change, empty_*
 --   4d. What the dashboard calls                public.upvote_questionnaire
 --   4e. Who is staff                            public.is_active_staff, for Row Level Security
 --
@@ -247,15 +247,18 @@ begin
 end;
 $$;
 
--- A note of what a push did, kept in the temp table push_log while a push runs (nothing otherwise).
-create or replace function private.push_note(p_what text, p_reused boolean)
+-- A note of what a push did, kept in the temp table push_log while a push runs (nothing otherwise): what kind
+-- of row (p_what), whether it was in the database already (p_reused), which row (p_id, so a row used many times
+-- is counted once) and its words (p_name, for the kinds the preview lists by name).
+drop function if exists private.push_note(text, boolean);
+create or replace function private.push_note(p_what text, p_reused boolean, p_id bigint default null, p_name text default null)
 returns void
 language plpgsql
 set search_path = public, pg_temp
 as $$
 begin
   if to_regclass('pg_temp.push_log') is not null then
-    insert into pg_temp.push_log (what, reused) values (p_what, p_reused);
+    insert into pg_temp.push_log (what, reused, id, name) values (p_what, p_reused, p_id, p_name);
   end if;
 end;
 $$;
@@ -277,9 +280,9 @@ begin
   select tag_id into the_id from public.tag where kind = p_kind and lower(btrim(name)) = lower(the_name);
   if the_id is null then
     insert into public.tag (kind, name) values (p_kind, the_name) returning tag_id into the_id;
-    perform private.push_note('tag', false);
+    perform private.push_note('tag', false, the_id, the_name);
   else
-    perform private.push_note('tag', true);
+    perform private.push_note('tag', true, the_id, the_name);
   end if;
   return the_id;
 end;
@@ -301,9 +304,9 @@ begin
   select answer_option_id into the_id from public.answer_option where standardized_label = normal;
   if the_id is null then
     insert into public.answer_option (standardized_label) values (normal) returning answer_option_id into the_id;
-    perform private.push_note('answer_option', false);
+    perform private.push_note('answer_option', false, the_id, normal);
   else
-    perform private.push_note('answer_option', true);
+    perform private.push_note('answer_option', true, the_id, normal);
   end if;
   return the_id;
 end;
@@ -374,7 +377,7 @@ begin
       if placed_at <> p_placement_id then
         raise exception 'The MATR ID % is already used by another question of this questionnaire. Give the variable a MATR ID of its own.', the_matr;
       end if;
-      perform private.push_note('variable', true);
+      perform private.push_note('variable', true, the_key);
       continue;
     end if;
     the_data := case when the_type = 'open_ended' then nullif(btrim(v ->> 'answer_data_type'), '') end;
@@ -385,7 +388,7 @@ begin
     insert into public.variable (questionnaire_id, placement_id, matr_id, display_order, label, variable_type, answer_data_type)
     values (p_questionnaire_id, p_placement_id, the_matr, next_order, nullif(private.squish(v ->> 'label'), ''), the_type, the_data)
     returning variable_key into the_key;
-    perform private.push_note('variable', false);
+    perform private.push_note('variable', false, the_key);
     perform private.push_tags(v, null, the_key, null);
 
     if the_type = 'closed_ended' then
@@ -428,7 +431,8 @@ declare
   the_words     text := nullif(private.squish(p_block ->> 'text'), '');
   the_component bigint;
   the_placement bigint;
-  reused        boolean := false;
+  worded        boolean := false; -- the database had this wording (its component) already
+  reused        boolean := false; -- the questionnaire printed it here already (its placement)
   depends_on    bigint;
   child         jsonb;
 begin
@@ -445,9 +449,14 @@ begin
   where c.kind = the_kind and ((the_words is null and c.text is null) or private.squish(c.text) = the_words);
   if the_component is null then
     insert into public.component (kind, text) values (the_kind, the_words) returning component_id into the_component;
-    perform private.push_note('component', false);
+    perform private.push_note('component', false, the_component);
   else
-    perform private.push_note('component', true);
+    worded := true;
+    perform private.push_note('component', true, the_component);
+  end if;
+  -- a question's wording, by name: the preview says which questions the database has already
+  if the_kind = 'Question' then
+    perform private.push_note('question', worded, the_component, the_words);
   end if;
 
   select pl.placement_id into the_placement from public.placement pl
@@ -461,10 +470,10 @@ begin
     select p_questionnaire_id, the_component, p_parent_id, coalesce(max(display_order), 0) + 1
     from public.placement where questionnaire_id = p_questionnaire_id and parent_placement_id is not distinct from p_parent_id
     returning placement_id into the_placement;
-    perform private.push_note('placement', false);
+    perform private.push_note('placement', false, the_placement);
   else
     reused := true;
-    perform private.push_note('placement', true);
+    perform private.push_note('placement', true, the_placement);
   end if;
   insert into pg_temp.push_placed (placement_id, kind, question_number)
   values (the_placement, the_kind, nullif(btrim(p_block ->> 'question_number'), ''));
@@ -502,11 +511,13 @@ language plpgsql
 set search_path = public, pg_temp
 as $$
 declare
-  w       public.wave;
-  q       public.questionnaire;
-  block   jsonb;
-  counts  jsonb;
-  asked   integer;
+  w        public.wave;
+  q        public.questionnaire;
+  block    jsonb;
+  counts   jsonb;
+  asked    integer;
+  updating boolean;
+  printed  bigint[];
 begin
   if e.questionnaire is null then
     raise exception 'Nothing has been saved for this extraction yet.';
@@ -523,19 +534,40 @@ begin
     raise exception 'The wave picked (%) isn''t one of the questionnaire picked. Pick them again (Basic Info).', w.name;
   end if;
   select count(*) into asked from public.wave_question where wave_id = w.wave_id;
-  if asked > 0 then
+  -- an extraction reopened from this wave (public.reopen_wave) replaces what the wave asks
+  updating := asked > 0 and coalesce(e.info ->> 'updates_wave_id', '') = w.wave_id::text; -- never null: any other draft is refused
+  if asked > 0 and not updating then
     raise exception 'The wave % of % already asks % question(s). Empty it first (Metadata > the wave > Empty), or pick a wave that asks none.', w.name, q.name, asked;
+  end if;
+  -- the option sets the database has before anything is pushed (or, for an update, removed): see the tally below
+  drop table if exists pg_temp.push_sets_before;
+  create temp table push_sets_before on commit drop as
+  select distinct choices
+  from (select array_agg(answer_option_id order by answer_option_id) as choices from public.response_option group by variable_key) as offered;
+
+  if updating then
+    -- wordings staff changed: everywhere they are printed where staff chose that (or nothing else prints them),
+    -- otherwise only here, as a wording of its own, which the push below finds or adds
+    perform private.reword_components(e.questionnaire -> 'components');
+    printed := array(select component_id from public.placement where questionnaire_id = q.questionnaire_id);
+    delete from public.wave_question where wave_id = w.wave_id;
+    perform private.tidy_placements(q.questionnaire_id);
   end if;
 
   create temp table if not exists push_placed (seq serial, placement_id bigint, kind text, question_number text) on commit drop;
-  create temp table if not exists push_log (what text, reused boolean) on commit drop;
-  truncate pg_temp.push_placed, pg_temp.push_log;
+  drop table if exists pg_temp.push_log; -- one made by an earlier version in this session has other columns
+  create temp table push_log (seq serial, what text, reused boolean, id bigint, name text) on commit drop;
+  truncate pg_temp.push_placed;
 
   for block in select value from jsonb_array_elements(coalesce(e.questionnaire -> 'components', '[]'::jsonb)) loop
     perform private.push_block(block, q.questionnaire_id, w.wave_id, null);
   end loop;
   if not exists (select 1 from public.wave_question where wave_id = w.wave_id) then
     raise exception 'This extraction has no questions to push.';
+  end if;
+  if updating then
+    -- only now, so a wording the update still prints keeps its component (and its id)
+    perform private.forget_components(printed);
   end if;
 
   -- the wave keeps the files it was read from
@@ -555,19 +587,58 @@ begin
   update public.extraction set status = 'Pushed', pushed_at = now(), saved_by = p_staff_id, editing_by = null, editing_at = null
   where extraction_id = e.extraction_id;
 
-  select coalesce(jsonb_object_agg(what || case when reused then '_reused' else '_new' end, n), '{}'::jsonb) into counts
-  from (select what, reused, count(*) as n from pg_temp.push_log group by what, reused) as tally;
+  -- Each row counts once however often the extraction uses it, and as already there only if this push didn't add
+  -- it: "10 tags already in the database" is ten tags, not the 285 places that use them.
+  drop table if exists pg_temp.push_tally;
+  create temp table push_tally on commit drop as
+  select what, coalesce(id::text, 'note ' || seq) as thing, bool_and(reused) as was_there, min(name) as name
+  from pg_temp.push_log group by 1, 2;
+  -- The option sets the extraction's variables offer: an option set is the choices one variable offers, whatever
+  -- their order or their codes ("yes | no" and "no | yes" are one set). It was there already when a variable
+  -- offered the same choices before this push began (push_sets_before). Named by its choices in the order a
+  -- variable lists them.
+  insert into pg_temp.push_tally (what, thing, was_there, name)
+  select 'option_set', used.choices::text, exists (select 1 from pg_temp.push_sets_before b where b.choices = used.choices), used.words
+  from (
+    select offered.choices, min(offered.words) as words
+    from (
+      select r.variable_key,
+             array_agg(r.answer_option_id order by r.answer_option_id) as choices,
+             string_agg(a.standardized_label, ' | ' order by r.display_order) as words
+      from public.response_option r join public.answer_option a on a.answer_option_id = r.answer_option_id
+      group by r.variable_key
+    ) as offered
+    join pg_temp.push_tally t on t.what = 'variable' and t.thing = offered.variable_key::text
+    group by offered.choices
+  ) as used;
+
+  select coalesce(jsonb_object_agg(what || case when was_there then '_reused' else '_new' end, n), '{}'::jsonb) into counts
+  from (select what, was_there, count(*) as n from pg_temp.push_tally group by what, was_there) as tally;
   counts := counts || jsonb_build_object(
     'extraction_id', e.extraction_id, 'wave_id', w.wave_id, 'questionnaire_id', q.questionnaire_id,
     'questions', (select count(*) from public.wave_question where wave_id = w.wave_id)
   );
+  if updating then
+    counts := counts || jsonb_build_object('questions_before', asked);
+  end if;
 
   insert into public.history (staff_id, action, entity, record_id, summary, details)
   values (p_staff_id, 'Pushed', 'wave', w.wave_id::text,
-          format('Pushed the extraction of %s, %s: %s questions, %s new variables.', q.name, w.name,
-                 counts ->> 'questions', coalesce(counts ->> 'variable_new', '0')),
+          format(case when updating then 'Pushed an edited extraction of %s, %s, in place of what it asked: %s questions, %s new variables.'
+                      else 'Pushed the extraction of %s, %s: %s questions, %s new variables.' end,
+                 q.name, w.name, counts ->> 'questions', coalesce(counts ->> 'variable_new', '0')),
           counts);
-  return counts;
+  -- with the names of what the preview lists: the tags, answer choices and option sets it adds and finds, and the
+  -- questions the database has already (the history keeps the counts alone)
+  return counts || jsonb_build_object('names', (
+    select coalesce(jsonb_object_agg(key, list), '{}'::jsonb)
+    from (
+      select what || case when was_there then '_reused' else '_new' end as key, jsonb_agg(name order by name) as list
+      from pg_temp.push_tally
+      where name is not null and (what in ('tag', 'answer_option', 'option_set') or (what = 'question' and was_there))
+      group by 1
+    ) as named
+  ));
 end;
 $$;
 
@@ -652,6 +723,140 @@ as $$
   );
 $$;
 
+-- A wording staff changed in an extraction reopened from the catalog (public.reopen_wave: each block names the
+-- component it came from, `component_id`). The component itself takes the new words, so every place that prints
+-- it does, when staff chose that for the block (`"reword": "everywhere"`) or when nothing else prints it. If the
+-- new words are a component already, every place printing the old one prints that one instead. Otherwise the old
+-- component is left as it is for the other questionnaires, and the push gives this one the new wording.
+-- p_blocks: the extraction's blocks (its `components`, or a block's `children`).
+create or replace function private.reword_components(p_blocks jsonb)
+returns void
+language plpgsql
+set search_path = public, pg_temp
+as $$
+declare
+  b         jsonb;
+  old       public.component;
+  new_words text;
+  the_same  bigint;
+  places    integer;
+begin
+  for b in select value from jsonb_array_elements(coalesce(p_blocks, '[]'::jsonb)) loop
+    new_words := nullif(private.squish(b ->> 'text'), '');
+    if coalesce(b ->> 'component_id', '') ~ '^[0-9]+$' and new_words is not null then
+      select * into old from public.component where component_id = (b ->> 'component_id')::bigint;
+      if found and old.kind = b ->> 'component_type' and private.squish(old.text) is distinct from new_words then
+        select count(*) into places from public.placement where component_id = old.component_id;
+        if b ->> 'reword' = 'everywhere' or places <= 1 then
+          select component_id into the_same from public.component
+          where kind = old.kind and private.squish(text) = new_words and component_id <> old.component_id;
+          if the_same is null then
+            update public.component set text = new_words where component_id = old.component_id;
+          else
+            update public.placement set component_id = the_same where component_id = old.component_id;
+            perform private.forget_components(array[old.component_id]);
+          end if;
+        end if;
+      end if;
+    end if;
+    perform private.reword_components(b -> 'children');
+  end loop;
+end;
+$$;
+
+-- The one tag of a kind on a question's placement or, with p_variable_key, on a variable (the first by name
+-- if it has several).
+create or replace function private.tag_name(p_kind text, p_placement_id bigint, p_variable_key bigint)
+returns text
+language sql
+stable
+set search_path = public, pg_temp
+as $$
+  select min(t.name) from public.tag t
+  where t.kind = p_kind and case
+    when p_variable_key is not null then exists (select 1 from public.variable_tag vt where vt.variable_key = p_variable_key and vt.tag_id = t.tag_id)
+    else exists (select 1 from public.placement_tag pt where pt.placement_id = p_placement_id and pt.tag_id = t.tag_id)
+  end;
+$$;
+
+-- Whether a placement, or anything inside it, is a question: one the wave asks, with p_wave_id, or any at all.
+create or replace function private.holds_question(p_placement_id bigint, p_wave_id bigint default null)
+returns boolean
+language sql
+stable
+set search_path = public, pg_temp
+as $$
+  with recursive inside as (
+    select p.placement_id, p.component_id from public.placement p where p.placement_id = p_placement_id
+    union all
+    select p.placement_id, p.component_id from public.placement p join inside i on p.parent_placement_id = i.placement_id
+  )
+  select exists (
+    select 1 from inside i join public.component c on c.component_id = i.component_id
+    where c.kind = 'Question'
+      and (p_wave_id is null or exists (select 1 from public.wave_question wq where wq.wave_id = p_wave_id and wq.placement_id = i.placement_id))
+  );
+$$;
+
+-- What a wave asks, as the blocks of an extraction's JSON (docs/database_design.md): the questionnaire's
+-- placements under p_parent_id in order, each naming its component (`component_id`), a question with its numbers
+-- in the wave, the question it depends on, its tags and its variables with their choices and codes. Left out:
+-- a question the wave doesn't ask (another wave's), and a section, grid or group whose questions are all other
+-- waves'. Every block is marked checked: it was reviewed before it was pushed.
+create or replace function private.wave_blocks(p_wave_id bigint, p_questionnaire_id bigint, p_parent_id bigint)
+returns jsonb
+language plpgsql
+stable
+set search_path = public, pg_temp
+as $$
+declare
+  blocks jsonb := '[]'::jsonb;
+  pl     record;
+  asked  record;
+  block  jsonb;
+begin
+  for pl in
+    select p.placement_id, p.depends_on_placement_id, c.component_id, c.kind, c.text
+    from public.placement p join public.component c on c.component_id = p.component_id
+    where p.questionnaire_id = p_questionnaire_id and p.parent_placement_id is not distinct from p_parent_id
+    order by p.display_order, p.placement_id
+  loop
+    block := jsonb_strip_nulls(jsonb_build_object('component_type', pl.kind, 'text', pl.text, 'component_id', pl.component_id, 'checked', true));
+    if pl.kind = 'Question' then
+      select wq.question_number, wq.printed_number into asked from public.wave_question wq
+      where wq.wave_id = p_wave_id and wq.placement_id = pl.placement_id;
+      continue when not found;
+      block := block || jsonb_strip_nulls(jsonb_build_object(
+        'question_number', asked.question_number,
+        'printed_number', asked.printed_number,
+        'parent_question', (select d.question_number from public.wave_question d
+                            where d.wave_id = p_wave_id and d.placement_id = pl.depends_on_placement_id),
+        'subject', private.tag_name('subject', pl.placement_id, null),
+        'time_frame', private.tag_name('time frame', pl.placement_id, null)
+      )) || jsonb_build_object('variables', (
+        select coalesce(jsonb_agg(jsonb_strip_nulls(jsonb_build_object(
+          'variable_type', v.variable_type, 'matr_id', v.matr_id, 'label', v.label, 'answer_data_type', v.answer_data_type,
+          'subject', private.tag_name('subject', null, v.variable_key),
+          'time_frame', private.tag_name('time frame', null, v.variable_key),
+          'unit', private.tag_name('unit', null, v.variable_key),
+          'response_options', (
+            select jsonb_agg(jsonb_build_object('answer_option', a.standardized_label, 'code_value', r.code_value) order by r.display_order)
+            from public.response_option r join public.answer_option a on a.answer_option_id = r.answer_option_id
+            where r.variable_key = v.variable_key
+          )
+        )) order by v.display_order, v.variable_key), '[]'::jsonb)
+        from public.variable v where v.placement_id = pl.placement_id
+      ));
+    elsif pl.kind in ('Section', 'Grid', 'Group') then
+      continue when private.holds_question(pl.placement_id) and not private.holds_question(pl.placement_id, p_wave_id);
+      block := block || jsonb_build_object('children', private.wave_blocks(p_wave_id, p_questionnaire_id, pl.placement_id));
+    end if;
+    blocks := blocks || jsonb_build_array(block);
+  end loop;
+  return blocks;
+end;
+$$;
+
 
 -- =====================================================================================================
 -- 4c. WHAT THE SITE CALLS
@@ -659,7 +864,9 @@ $$;
 
 -- Push an extraction into the catalog: its blocks, questions, variables and response options go in, its wave
 -- is marked as asking the questions, and the extraction is marked Pushed. The wave must ask nothing yet
--- (empty it first if it was extracted before). Returns what was done, as counts.
+-- (empty it first if it was extracted before), unless the extraction was reopened from that wave
+-- (public.reopen_wave): then it takes the place of what the wave asks, in this one transaction. Returns what
+-- was done, as counts (with `questions_before` for such an update).
 -- With p_dry_run, does all of it and then undoes it, returning the counts: what the Edit Extraction page
 -- shows before staff push.
 create or replace function public.push_extraction(p_extraction_id bigint, p_staff_id bigint, p_dry_run boolean default false)
@@ -689,6 +896,58 @@ begin
     when sqlstate 'P0901' then
       return sqlerrm::jsonb;   -- the push was undone with the error; its counts come back
   end;
+end;
+$$;
+
+-- Bring what a wave asks back into Edit Extraction: a new Draft extraction holding the wave's questions as the
+-- catalog has them now (private.wave_blocks), going into the same wave, with the wave's PDF beside it. Its
+-- info says which wave it came from (`updates_wave_id`), so pushing it replaces what that wave asks instead of
+-- being refused (private.push_run); until then the catalog is as it was. The extraction the wave was first pushed
+-- from stays as the record of what was read and reviewed. Asked for again while that draft is open, it gives
+-- the same draft. Returns the draft's extraction_id.
+create or replace function public.reopen_wave(p_wave_id bigint, p_staff_id bigint)
+returns bigint
+language plpgsql
+set search_path = public, pg_temp
+as $$
+declare
+  w      public.wave;
+  q      public.questionnaire;
+  the_id bigint;
+begin
+  perform private.require_staff(p_staff_id);
+  select * into w from public.wave where wave_id = p_wave_id;
+  if not found then
+    raise exception 'That wave is no longer in the database.';
+  end if;
+  select * into q from public.questionnaire where questionnaire_id = w.questionnaire_id;
+  if not exists (select 1 from public.wave_question where wave_id = p_wave_id) then
+    raise exception 'The wave % of % asks no questions yet, so there is nothing to edit. Start a New Extraction for it instead.', w.name, q.name;
+  end if;
+  select extraction_id into the_id from public.extraction
+  where status = 'Draft' and info ->> 'updates_wave_id' = p_wave_id::text
+  order by created_at
+  limit 1;
+  if the_id is not null then
+    return the_id;
+  end if;
+  insert into public.extraction (method, status, prepared_by, saved_by, info, questionnaire, pdf_sha256, pdf_name)
+  values (
+    'Manual', 'Draft', p_staff_id, p_staff_id,
+    jsonb_build_object(
+      'registry_id', (select s.registry_id::text from public.study s where s.study_id = q.study_id),
+      'study_id', q.study_id::text, 'questionnaire_id', q.questionnaire_id::text, 'wave_id', w.wave_id::text,
+      'updates_wave_id', w.wave_id::text
+    ),
+    jsonb_build_object(
+      'schema_version', 2,
+      'questionnaire', jsonb_strip_nulls(jsonb_build_object('name', q.name, 'abbreviation', q.abbreviation)),
+      'components', private.wave_blocks(w.wave_id, q.questionnaire_id, null)
+    ),
+    w.pdf_sha256, w.pdf_name
+  )
+  returning extraction_id into the_id;
+  return the_id;
 end;
 $$;
 

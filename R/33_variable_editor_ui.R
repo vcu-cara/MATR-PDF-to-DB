@@ -77,7 +77,7 @@ variable_cards <- function(block, draft, view, lookups, ns) {
     if (nrow(boxes) > 0) {
       div(
         class = "variable-line variable-head", `aria-hidden` = "true",
-        span(), span("MATR ID"), span("Response"), span("Tags"), lapply(optional_variable_fields[columns], span), span(), span()
+        span(), span("MATR ID"), span("Response Option Set"), span("Variable Tags"), lapply(optional_variable_fields[columns], span), span(), span()
       )
     },
     div(
@@ -114,7 +114,7 @@ variable_line <- function(box, draft, view, lookups, ns, shared = character(), c
         placeholder = "MATR ID", label = "MATR ID", problems = problems
       ), class = "is-id"),
       variable_cell(
-        "Response",
+        "Response Option Set",
         if (!is_choice_box) {
           field_select(
             "variables", box, "answer_data_type", lookups$answer_data_types,
@@ -135,7 +135,7 @@ variable_line <- function(box, draft, view, lookups, ns, shared = character(), c
         },
         class = "is-response"
       ),
-      variable_cell("Tags", variable_tags(box, showing, view, ns, is_choice_box), class = "is-tags"),
+      variable_cell("Variable Tags", variable_tags(box, showing, view, ns, is_choice_box), class = "is-tags"),
       lapply(columns, function(name) {
         variable_cell(
           optional_variable_fields[[name]],
@@ -169,45 +169,61 @@ optional_variable_fields <- c(subject = "Subject", time_frame = "Time frame", la
 # The fields that are tags (rows of TAG, by kind), in the order the pills come in.
 tag_fields <- optional_variable_fields[c("subject", "time_frame", "unit")]
 
+# The tags a question has of its own: who and when all of it is about. A unit is always a variable's.
+question_tag_fields_named <- tag_fields[c("subject", "time_frame")]
+
 # A variable's tags: a pill for each it has (`tag_pill()`), coloured by kind, in a box drawn like a field, and
 # + Tag at the end offering the kinds it hasn't got (a variable with choices has no unit).
 # showing: The optional fields the variable shows (`shown_optional()`).
 variable_tags <- function(box, showing, view, ns, is_choice_box) {
-  pills <- intersect(names(tag_fields), showing)
-  addable <- setdiff(names(tag_fields), c(showing, if (is_choice_box) "unit"))
+  kinds <- setdiff(names(tag_fields), if (is_choice_box) "unit")
+  tag_box("variables", box, kinds, showing, view, ns, "Add a tag: who or when it's about, or its unit")
+}
+
+# A question's own tags, drawn like a variable's: what all of the question is about ("have you smoked?" [lifetime]).
+# What tells its variables apart ([twin a] and [twin b]) is on each variable instead, and nothing is said twice.
+# block: One row of a draft's `components`: a question.
+question_tags <- function(block, view, ns) {
+  showing <- shown_optional(block, question_tag_fields_named, view)
+  tag_box("components", block, names(question_tag_fields_named), showing, view, ns, "Add a tag: who or when the whole question is about")
+}
+
+# The tags of a row of `table` (a variable, or a question's block): its pills, then + Tag offering the `kinds` it
+# hasn't got.
+tag_box <- function(table, row, kinds, showing, view, ns, title) {
+  addable <- setdiff(kinds, showing)
   div(
     class = "tag-box",
-    lapply(pills, tag_pill, box = box, view = view, ns = ns),
-    if (length(addable) > 0) {
-      add_field_menu(box, addable, tag_fields, "Add a tag: who or when it's about, or its unit", text = "Tag", class = "tag-add")
-    }
+    lapply(intersect(kinds, showing), tag_pill, row = row, view = view, ns = ns, table = table),
+    if (length(addable) > 0) add_field_menu(row, addable, tag_fields, title, text = "Tag", class = "tag-add")
   )
 }
 
-# One tag of a variable: its words, typed in a pill of its kind's colour (the database's tags of that kind are
-# offered as they are typed), with the × that takes it away.
-tag_pill <- function(name, box, view, ns) {
+# One tag of a variable or a question: its words, typed in a pill of its kind's colour (the database's tags of that
+# kind are offered as they are typed), with the × that takes it away.
+tag_pill <- function(name, row, view, ns, table = "variables") {
+  what <- if (table == "components") "the question is" else "it's"
   input <- switch(name,
     subject = field_text(
-      "variables", box, "subject",
-      placeholder = "who it's about", list = ns("subjects"), label = "Subject: who it's about (blank for the respondent)",
+      table, row, "subject",
+      placeholder = "who it's about", list = ns("subjects"), label = sprintf("Subject: who %s about (blank for the respondent)", what),
       problems = view$problems, class = "tag-pill-input"
     ),
     time_frame = field_text(
-      "variables", box, "time_frame",
-      placeholder = "when", list = ns("time-frames"), label = "Time frame: when its answer is about",
+      table, row, "time_frame",
+      placeholder = "when", list = ns("time-frames"), label = sprintf("Time frame: when %s about", what),
       problems = view$problems, class = "tag-pill-input"
     ),
     unit = field_text(
-      "variables", box, "unit",
+      table, row, "unit",
       placeholder = "unit", list = ns("units"), label = "Unit: what its number is in",
       problems = view$problems, class = "tag-pill-input"
     )
   )
   # as wide as its words (or its placeholder), so the pill fits them
-  input <- tagAppendAttributes(input, size = max(nchar(blank_if_na(box[[name]])), nchar(input$attribs$placeholder)) + 1)
-  if (identical(view$focus, paste0(box$id, ":", name))) input <- tagAppendAttributes(input, `data-focus-now` = NA)
-  span(class = c("tag-pill", paste0("is-", name)), input, remove_field_button(box, name, tag_fields, icon = "remove"))
+  input <- tagAppendAttributes(input, size = max(nchar(blank_if_na(row[[name]])), nchar(input$attribs$placeholder)) + 1)
+  if (identical(view$focus, paste0(row$id, ":", name))) input <- tagAppendAttributes(input, `data-focus-now` = NA)
+  span(class = c("tag-pill", paste0("is-", name)), input, remove_field_button(row, name, tag_fields, icon = "remove"))
 }
 
 # A variable's label, with its delete button that takes it away.

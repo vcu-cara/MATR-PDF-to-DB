@@ -5,7 +5,7 @@
 
 # The fields staff can change by typing or picking. A value keeps its column's type.
 editable_fields <- list(
-  components = c("component_type", "text", "printed_number", "parent_question_id", "checked"),
+  components = c("component_type", "text", "printed_number", "parent_question_id", "checked", "subject", "time_frame"),
   variables = c("variable_type", "label", "subject", "time_frame", "answer_data_type", "unit", "matr_id"),
   response_options = c("answer_option", "code_value")
 )
@@ -30,20 +30,24 @@ draft_service_update <- function(draft, table, id, field, value) {
     variable_type = set_variable_type(draft, row, value),
     matr_id = set_matr_id(draft, row, value),
     parent_question_id = set_parent_question(draft, row, value),
-    subject = {
-      draft$variables$subject[row] <- normal_subject(value)
+    subject = { # a question's or a variable's
+      draft[[table]]$subject[row] <- normal_subject(value)
       draft
     },
     time_frame = {
-      draft$variables$time_frame[row] <- normal_time_frame(value)
+      draft[[table]]$time_frame[row] <- normal_time_frame(value)
       draft
     },
+
     unit = {
       draft$variables$unit[row] <- normal_unit(value)
       draft
     },
-    answer_option = {
-      draft$response_options$answer_option[row] <- normal_answer(value)
+    answer_option = { # with the variable's other choices: together they say what a letter stands for
+      choices <- draft$response_options
+      beside <- choices$variable_id %in% choices$variable_id[row]
+      choices$answer_option[row] <- normal_answer(value)
+      draft$response_options$answer_option[beside] <- sexes_written_out(choices$answer_option[beside])
       draft
     },
     {
@@ -51,6 +55,34 @@ draft_service_update <- function(draft, table, id, field, value) {
       draft
     }
   )
+}
+
+# Where a reworded block's new words go: everywhere its component is printed, or only here.
+# A block of an extraction reopened from the catalog names the component it came from (`catalog_id`). When staff
+# change its words and other places print that component too (other questionnaires, or other blocks of this
+# one), the push dialog asks which they mean. Everywhere: the component itself takes the new words when the
+# extraction is pushed, so the draft's other blocks from the same component take them now. Only here (the
+# default): this block gets a wording of its own, and the others keep theirs.
+# id: The block's id.
+# everywhere: `TRUE` for everywhere, `FALSE` for only here.
+# was: The component's words in the catalog, which the draft's other blocks from it get back when a choice of
+#   everywhere is taken back; `NA` leaves them as they are.
+draft_service_reword <- function(draft, id, everywhere, was = NA_character_) {
+  blocks <- draft$components
+  row <- match(id, blocks$id)
+  if (is.na(row)) stop("That's no longer in the draft.")
+  if (is.na(blocks$catalog_id[row])) stop("This block didn't come from the database, so nothing else prints it.")
+  same <- which(blocks$catalog_id %in% blocks$catalog_id[row] & blocks$component_type == blocks$component_type[row])
+  if (everywhere) {
+    blocks$text[same] <- blocks$text[row]
+    blocks$reword[same] <- "everywhere"
+  } else {
+    followed <- setdiff(same[blocks$reword[same] %in% "everywhere"], row)
+    if (!is.na(was)) blocks$text[followed] <- normal_text(was)
+    blocks$reword[same] <- NA
+  }
+  draft$components <- blocks
+  draft
 }
 
 # Browsers send text (or TRUE/FALSE from a checkbox). Blanks become NA.

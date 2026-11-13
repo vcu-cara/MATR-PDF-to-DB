@@ -12,6 +12,7 @@ app_icons <- c(
   undo = "rotate-left",
   save = "floppy-disk",
   preview = "eye",
+  help = "circle-info", # beside a field's name: pointing at it says what the field is for
   verify = "circle-check",
   ungroup = "object-ungroup",
   change_kind = "right-left",
@@ -22,7 +23,6 @@ app_icons <- c(
   collapse = "compress",
   filter = "filter",
   search = "magnifying-glass",
-  normalize = "wand-magic-sparkles",
   reextract = "arrows-rotate",
   link = "link",
   unlink = "link-slash",

@@ -392,6 +392,18 @@ test_that("a new answer choice and a tag used twice are added once, and a variab
   expect_false(any(grepl("variable_tag|Insert tag", lines)))
 })
 
+test_that("a question added by hand takes F as a grade among grades, and M and F on their own as the sexes", {
+  vars <- variables_json(
+    list(variable_type = "closed_ended", matr_id = "A1", response_options = list(choice("1", "D-"), choice("0", "F"))),
+    list(variable_type = "closed_ended", matr_id = "A2", response_options = list(choice("1", "M"), choice("2", "F")))
+  )
+  form <- form_for("placement", "add", scope = "1", placement__kind = "Question", placement__text = "Grade and sex?", placement__asked_in = "1", placement__variables = vars)
+  lines <- item_lines(form_items(form)$items)
+  added <- sub("^Insert answer_option .* standardized_label: - -> ", "", grep("^Insert answer_option .* standardized_label", lines, value = TRUE))
+  expect_setequal(c(added, "male", "female"), c("d-", "f", "male", "female")) # the sexes may be in the list already
+  expect_false("m" %in% added)
+})
+
 test_that("what stops a question being added is said under the variables field", {
   problem <- function(...) {
     form <- form_for("placement", "add", scope = "1", placement__kind = "Question", placement__text = "Q", placement__asked_in = "1", placement__variables = variables_json(...))
@@ -424,9 +436,9 @@ test_that("the variables start as one, about the respondent, with one blank choi
   expect_equal(start[[1]]$variable_type, "closed_ended")
   expect_equal(start[[1]]$response_options[[1]]$code_value, "1")
   vars <- variables_json(
-    list(variable_type = "closed_ended", matr_id = "A1", subject = "twin", label = "twin", time_frame = "past week", response_options = list(choice("1", "yes"), choice("0", "no"))),
+    list(variable_type = "closed_ended", matr_id = "A1", subject = "twin", label = "at its worst", time_frame = "past week", response_options = list(choice("1", "yes"), choice("0", "no"))),
     list(variable_type = "open_ended", matr_id = "A2", subject = "", label = "", answer_data_type = "NUMBER", unit = "inches")
-  )
+  ) # the label says something its tags don't: one that only repeats a tag ("twin") is left out
   back <- edit_variables_json(edit_variables_draft(edit_variables_parse(vars)))
   expect_equal(jsonlite::fromJSON(back, simplifyVector = FALSE), jsonlite::fromJSON(vars, simplifyVector = FALSE))
   expect_error(edit_variables_parse('{"matr_id": "A1"}'), "aren't a list")

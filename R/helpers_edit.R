@@ -449,6 +449,21 @@ edit_duplicates_dialog <- function(found, confirm_id) {
   )
 }
 
+# Asks before two rows are merged (a tag renamed to another tag's name): it can't be taken back, since afterwards
+# nothing says which things carried which.
+# merge: What the kind's `merge()` gave: `from` and `into_name` (the two names) and `sentence` (what saving does).
+edit_merge_dialog <- function(merge, confirm_id) {
+  confirm_dialog(
+    "Merge these tags?",
+    p(merge$sentence),
+    p(sprintf(
+      "This can't be undone: once they are one tag, nothing says what carried “%s” and what carried “%s”.",
+      merge$from, merge$into_name
+    )),
+    confirm_id = confirm_id, confirm_label = "Merge them", keep_label = "Go back", easy_close = TRUE
+  )
+}
+
 # The same warning as a note on the form, for a form that is itself in a dialog.
 # A dialog can't open over another, so the pop-ups that add from a drop-down show what is there
 # under the form as it is typed, and their button says "Add it anyway".

@@ -120,15 +120,68 @@ extraction_service_push_summary <- function(counts) {
     if (n("variable_new") > 0) plural(n("variable_new"), "new variable"),
     if (n("variable_reused") > 0) paste0(plural(n("variable_reused"), "variable"), " already there"),
     if (n("response_option_new") > 0) plural(n("response_option_new"), "response option"),
+    if (n("option_set_new") > 0) plural(n("option_set_new"), "new option set"),
+    if (n("option_set_reused") > 0) paste0(plural(n("option_set_reused"), "option set"), " already there"),
     if (n("answer_option_new") > 0) plural(n("answer_option_new"), "new answer choice"),
     if (n("answer_option_reused") > 0) paste0(plural(n("answer_option_reused"), "answer choice"), " already there"),
     if (n("tag_new") > 0) paste(plural(n("tag_new"), "new subject, time frame or unit", plural_form = "new subjects, time frames or units")),
     if (n("tag_reused") > 0) paste0(plural(n("tag_reused"), "subject, time frame or unit", plural_form = "subjects, time frames or units"), " already there")
   )
+  # a draft reopened from the wave takes the place of what the wave asks
+  replaces <- if (n("questions_before") > 0) paste0("Replaces the ", plural(n("questions_before"), "question"), " the wave asks now. ") else ""
   if (length(parts) == 0) {
-    return("Adds nothing.")
+    return(paste0(replaces, "Adds nothing."))
   }
-  paste0("Adds ", word_list(parts), ".")
+  paste0(replaces, "Adds ", word_list(parts), ".")
+}
+
+# ------ Wordings other places print too ---------------------------------------------------------------
+# The blocks of a reopened draft that staff reworded while other places print the same wording: each needs a
+# choice before it is pushed, since a wording is kept once (a component) and shared by every place that prints
+# it. Only here (the default) gives this place a wording of its own and leaves the others as they are;
+# everywhere changes the component itself, so every questionnaire that prints it shows the new words.
+# A block printed nowhere else needs no choice (its component just takes the new words), nor does one whose kind
+# changed (it is another block now).
+# words: What the catalog has for the draft's components: `components` and `places`, as
+#   `component_model_places()` returns them.
+# catalog: The live tables, for the other questionnaires' names.
+# questionnaire_id: The questionnaire the draft goes into, whose own other places are counted, not named.
+# Returns: A data frame, in printed order: `id` (the block), `kind`, `was` and `now` (the words), `everywhere`
+#   (whether staff chose that) and `elsewhere` (where else it is printed, in words).
+extraction_service_rewordings <- function(draft, words, catalog, questionnaire_id) {
+  blocks <- draft$components[match(draft_service_printed_order(draft), draft$components$id), , drop = FALSE]
+  known <- match(blocks$catalog_id, words$components$component_id)
+  was <- words$components$text[known]
+  reworded <- !is.na(known) & blocks$component_type == words$components$kind[known] &
+    !is.na(blocks$text) & squish(normal_text(blocks$text)) != squish(normal_text(was))
+  # one line for each wording: the first block of the draft that has it
+  reworded <- reworded & !duplicated(paste(blocks$catalog_id, blocks$text))
+  elsewhere <- vapply(blocks$catalog_id, function(component) {
+    printed_by <- words$places$questionnaire_id[words$places$component_id %in% component]
+    here <- sum(printed_by %in% questionnaire_id) - 1L
+    others <- catalog$questionnaires$name[match(unique(printed_by[!printed_by %in% questionnaire_id]), as.character(catalog$questionnaires$questionnaire_id))]
+    others[is.na(others)] <- "another questionnaire"
+    word_list(c(
+      if (here > 0) paste(plural(here, "other place"), "in this questionnaire"),
+      sort(unique(others))
+    ))
+  }, character(1))
+  keep <- reworded & nzchar(elsewhere)
+  data.frame(
+    id = blocks$id[keep], kind = blocks$component_type[keep], was = was[keep], now = blocks$text[keep],
+    everywhere = blocks$reword[keep] %in% "everywhere", elsewhere = unname(elsewhere[keep])
+  )
+}
+
+# The wordings to choose for, read from the database for the draft on the page.
+# record: The extraction's record: only a draft reopened from a wave has any.
+# Returns: As `extraction_service_rewordings()`; no rows for a draft that wasn't reopened.
+extraction_service_read_rewordings <- function(connection, record, draft, catalog) {
+  ids <- draft$components$catalog_id
+  words <- if (any(!is.na(ids))) component_model_places(connection, ids) else list(
+    components = no_rows(c("component_id", "kind", "text")), places = no_rows(c("component_id", "questionnaire_id"))
+  )
+  extraction_service_rewordings(draft, words, catalog, extraction_service_info(record)$questionnaire_id)
 }
 
 # ------ The preview -------------------------------------------------------------------------------
@@ -183,43 +236,48 @@ extraction_service_where_cards <- function(info, catalog) {
   )
 }
 
-# The cards for what a push adds: for each kind of row that can be kept once and used again, how many
-# are new and how many are already in the database. A wave's questions and a variable's response options
-# aren't among them: there is a new one for each question and each choice, so they only say how long the
-# questionnaire is (the sentence above the cards counts them).
-# counts: From `extraction_service_push_preview()`.
-# Returns: A list of cards (see `request_card_ui()`); a card is NEW when its rows are added.
+# The cards for what a push adds: the questions, option sets, answer choices and tags (subjects, time frames and
+# units) the questionnaire uses, each counted once however often it is used, as new or as already in the
+# database. A wording, a choice and a tag are each kept once and shared, so "7 already in the database" is seven
+# tags the database has, not the places that use them. An option set is the choices one variable offers, whatever
+# their order or codes ("yes | no"); it is already in the database when a variable there offers the same ones.
+# Each chip lists what it counts when pointed at: the option sets by their choices, the answer choices and tags by
+# name, and the questions the database has already (the new ones are the questionnaire itself, laid out
+# below). Variables, the wave's questions and response options are new each time, so they are only in the
+# sentence above the cards.
+# counts: From `extraction_service_push_preview()`: its counts, and `names` (what the lists name).
+# Returns: A list of cards (see `request_card_ui()`), each with `lists`: the names a chip stands for, by the
+#   chip's words. A card is NEW when its rows are added.
 extraction_service_what_cards <- function(counts) {
   n <- function(key) as.integer(counts[[key]] %||% 0L)
   count <- function(x) format(x, big.mark = ",")
-  card <- function(kind, n_new, n_found, title, found_note) {
+  named <- function(key) as.character(unlist(counts$names[[key]]))
+  card <- function(kind, what, title, list_new = TRUE) {
+    n_new <- n(paste0(what, "_new"))
+    n_found <- n(paste0(what, "_reused"))
+    new <- if (n_new > 0) paste(count(n_new), "new")
+    found <- if (n_found > 0) paste(count(n_found), "already in the database")
+    lists <- list()
+    if (list_new && !is.null(new) && length(named(paste0(what, "_new"))) > 0) lists[[new]] <- named(paste0(what, "_new"))
+    if (!is.null(found) && length(named(paste0(what, "_reused"))) > 0) lists[[found]] <- named(paste0(what, "_reused"))
     list(
-      kind = kind, title = title, subtitle = "",
-      facts = c(if (n_new > 0) paste(count(n_new), "new"), if (n_found > 0) paste(count(n_found), found_note)),
-      is_new = n_new > 0
+      kind = kind, title = plural(n_new + n_found, title, big_mark = ","), subtitle = "",
+      facts = as.character(c(new, found)), lists = lists, is_new = n_new > 0
     )
   }
-  blocks <- card(
-    "Blocks", n("component_new"), n("component_reused"),
-    plural(n("component_new") + n("component_reused"), "block", big_mark = ","), "already in the database"
-  )
+  questions <- card("Questions", "question", "different question", list_new = FALSE)
+  if (n("question_new") + n("question_reused") == 0) {
+    # an answer from before questions were counted apart: how many the wave asks
+    questions$title <- plural(n("questions"), "question", big_mark = ",")
+  }
   if (n("placement_reused") > 0) {
-    blocks$facts <- c(blocks$facts, paste(count(n("placement_reused")), "printed by this questionnaire already"))
+    questions$facts <- c(questions$facts, paste(plural(n("placement_reused"), "block", big_mark = ","), "printed by this questionnaire already"))
   }
   list(
-    blocks,
-    card(
-      "Variables", n("variable_new"), n("variable_reused"),
-      plural(n("variable_new") + n("variable_reused"), "variable", big_mark = ","), "already recorded"
-    ),
-    card(
-      "Answer choices", n("answer_option_new"), n("answer_option_reused"),
-      plural(n("answer_option_new") + n("answer_option_reused"), "different answer choice", big_mark = ","), "already in the database"
-    ),
-    card(
-      "Subjects, time frames and units", n("tag_new"), n("tag_reused"),
-      plural(n("tag_new") + n("tag_reused"), "tag", big_mark = ","), "already in the database"
-    )
+    questions,
+    card("Option sets", "option_set", "option set"),
+    card("Answer choices", "answer_option", "different answer choice"),
+    card("Subjects, time frames and units", "tag", "tag")
   )
 }
 

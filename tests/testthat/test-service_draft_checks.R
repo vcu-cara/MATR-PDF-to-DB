@@ -113,51 +113,31 @@ test_that("a section needs its printed heading, a group has none, and a section 
   expect_true(any(problems_of(nested)$id == inner & grepl("can't be inside a group", problems_of(nested)$message)))
 })
 
-test_that("each variable of a question with several has a label of its own, so the rows of a grid can be told apart", {
+test_that("a question's variables are told apart by their MATR IDs, so none is asked for a label", {
   closed <- function(label = NULL, choices = c("often", "never"), subject = NULL) {
     options <- lapply(choices, function(words) list(answer_option = words))
     list(variable_type = "closed_ended", label = label, subject = subject, response_options = options)
   }
   asked <- function(...) {
     draft <- draft_service_from_json(list(questionnaire = list(), components = list(list(
-      component_type = "Question", text = "How often did you do each of the following?", printed_number = "5", variables = list(...)
+      component_type = "Question", text = "What is the sex of the twins?", printed_number = "8, 24", variables = list(...)
     ))))
     with_matr_ids(draft)
   }
   problems_of <- function(draft) draft_service_check(draft, test_lookups())
-  # a single question needs no label; a grid's rows are each labelled with their words
-  expect_equal(nrow(problems_of(asked(closed()))), 0)
-  expect_equal(nrow(problems_of(asked(closed("Walked to work"), closed("Rode a bike")))), 0)
-  # a lone check box says what it records itself ("these symptoms haven't stopped")
-  expect_equal(nrow(problems_of(asked(closed("Walked to work"), closed(choices = "never did any of these")))), 0)
-  # the same words for someone else are another row ("Age" of Twin A and of Twin B), and so are they for another time
-  expect_equal(nrow(problems_of(asked(closed("Age", subject = "Twin A"), closed("Age", subject = "Twin B")))), 0)
-  timed <- function(label, time_frame) c(closed(label), list(time_frame = time_frame))
-  expect_equal(nrow(problems_of(asked(timed("Times", "lifetime"), timed("Times", "past 30 days")))), 0)
-  # a write-in's unit tells it apart too (AHP 1: feet and inches)
+  # the same question about each twin (MQ 8 and 24): two variables, each tagged with its twin, no labels
+  expect_equal(nrow(problems_of(asked(closed(subject = "twin a"), closed(subject = "twin b")))), 0)
+  # nor do they need different tags, or labels at all: a roster's rows, a grid's columns, feet and inches
+  expect_equal(nrow(problems_of(asked(closed(subject = "children"), closed(subject = "children"), closed(subject = "children", choices = c("yes", "no"))))), 0)
+  expect_equal(nrow(problems_of(asked(closed("Walked to work"), closed()))), 0)
+  expect_equal(nrow(problems_of(asked(closed("Walked to work"), closed("walked to work ")))), 0)
   measured <- function(unit, ...) list(variable_type = "open_ended", answer_data_type = "NUMBER", unit = unit, ...)
-  expect_equal(nrow(problems_of(asked(measured("feet"), measured("inches")))), 0)
-  expect_equal(
-    problems_of(asked(measured("years"), measured("years"), measured("years", label = "Age started")))$message,
-    sprintf("Variable %d: give it a label the question's other variables don't have.", 1:2)
-  )
-  # a roster's rows (the first child, the second, …) are alike in everything and have no labels: their order and
-  # MATR IDs tell them apart, so none is asked for a label; with a row unlike the others it isn't a roster
-  expect_equal(nrow(problems_of(asked(measured("years"), measured("years")))), 0)
-  expect_equal(nrow(problems_of(asked(closed(subject = "children"), closed(subject = "children"), closed(subject = "children")))), 0)
-  expect_equal(nrow(problems_of(asked(measured("pounds"), measured("ounces"), measured("pounds"), measured("ounces")))), 0)
-  expect_equal(
-    problems_of(asked(closed(subject = "children"), closed(subject = "children"), closed(subject = "children", choices = c("yes", "no"))))$message,
-    sprintf("Variable %d: label it with its row's words, so it can be told apart from the question's other variables.", 1:3)
-  )
+  expect_equal(nrow(problems_of(asked(measured("years"), measured("years"), measured("years", label = "Age started")))), 0)
 
-  unlabelled <- problems_of(asked(closed("Walked to work"), closed()))
-  expect_equal(
-    unlabelled$message, "Variable 2: label it with its row's words, so it can be told apart from the question's other variables."
-  )
-  expect_equal(unlabelled$field, "label")
-  twice <- problems_of(asked(closed("Walked to work"), closed("walked to work ")))
-  expect_equal(twice$message, sprintf("Variable %d: give it a label the question's other variables don't have.", 1:2))
+  # what does tell them apart is checked: two variables can't share a MATR ID
+  same_id <- asked(closed(subject = "twin a"), closed(subject = "twin b"))
+  same_id$variables$matr_id <- "mq8"
+  expect_equal(problems_of(same_id)$message, sprintf("Variable %d: give it a MATR ID no other variable has.", 1:2))
 })
 
 test_that("a grid needs the lead-in its questions share, and holds nothing but them and what explains them", {

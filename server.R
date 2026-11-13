@@ -267,9 +267,14 @@ function(input, output, session) {
     )
 
     # ------ * Metadata (Make an edit) ----------------------------------------
-    # Re-extract on a wave shows the new extraction's reading on New Extraction.
+    # Re-extract on a wave shows the new extraction's reading on New Extraction; Edit extraction on a wave opens
+    # what it asks on Edit Extraction, as a draft the Extraction Drafts page then lists.
     make_edit_server(
-      "make_edit", database, me, show_page, active = on_page("make_edit"), open_reading = extraction$open_details
+      "make_edit", database, me, show_page, active = on_page("make_edit"), open_reading = extraction$open_details,
+      open_draft = function(record) {
+        extractions$changed()
+        open_edit_extraction(record)
+      }
     )
 
     # ------ * Edit History ----------------------------------------------------

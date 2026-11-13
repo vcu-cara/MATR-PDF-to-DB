@@ -152,6 +152,22 @@ wave_reextract_button <- function(row) {
   )
 }
 
+# Edit extraction on a wave's details: what the wave asks is opened on the Edit Extraction page as a draft
+# (`extraction_service_reopen_wave()`), to be changed there and pushed again in place of what the wave asks now.
+# Nothing in the database changes until that push. Off, saying why, for a wave that asks nothing yet.
+# asks: Whether the wave asks any question.
+wave_edit_extraction_button <- function(asks) {
+  review_button(
+    icon_label("edit", "Edit extraction"), "edit_wave_extraction",
+    class = "btn btn-outline-dark", disabled = !asks,
+    title = if (asks) {
+      "Open what this wave asks on Edit Extraction, to change it and push it again. Nothing changes until it is pushed"
+    } else {
+      "This wave asks no questions yet, so there is nothing to edit. Start a New Extraction for it instead"
+    }
+  )
+}
+
 # What Re-extract asks first: the wave is emptied, and where the new extraction goes.
 # wave: What the wave is called ("AHP Wave 3").
 reextract_wave_dialog <- function(ns, wave) {

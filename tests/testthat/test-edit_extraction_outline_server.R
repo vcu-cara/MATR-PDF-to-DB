@@ -619,6 +619,34 @@ test_that("a variable's About and label show when they have something in them, a
   })
 })
 
+test_that("a question has tags of its own, who and when all of it is about, above its variables", {
+  draft <- draft_service_update(short_gold_draft(), "components", "c3", "time_frame", "in your lifetime")
+  page <- edit_extraction_state(draft)
+  seen <- local_browser()
+  shiny::testServer(extraction_outline_server, args = outline_args(page), {
+    page$selected("c3")
+    html <- detail_html(output)
+    # its time frame is a pill of the question's, with its ×; + Tag offers who it is about, and never a unit
+    expect_match(html, '<span class="tag-pill is-time_frame">\\s*<input[^>]*value="lifetime"[^>]*data-table="components" data-id="c3" data-field="time_frame"')
+    expect_match(html, 'data-action="hide_field" data-id="c3" data-name="time_frame"')
+    expect_match(html, 'data-action="show_field" data-id="c3" data-name="subject"')
+    expect_false(grepl('data-action="show_field" data-id="c3" data-name="(unit|time_frame|label)"', html))
+    # added, who it is about is an empty pill with the cursor in it
+    session$setInputs(action = list(action = "show_field", id = "c3", name = "subject"))
+    expect_equal(shown(), "c3:subject")
+    expect_match(detail_html(output), 'data-table="components" data-id="c3" data-field="subject"[^>]*data-focus-now')
+    # typed, it is the question's; × takes the time frame away again
+    session$setInputs(edit = list(table = "components", id = "c3", field = "subject", value = "Respondent's Twins", typed = TRUE))
+    expect_equal(page$draft()$components$subject[page$draft()$components$id == "c3"], "twins")
+    session$setInputs(action = list(action = "hide_field", id = "c3", name = "time_frame"))
+    expect_true(is.na(page$draft()$components$time_frame[page$draft()$components$id == "c3"]))
+    expect_false(grepl('data-id="c3" data-field="time_frame"', detail_html(output)))
+    # a block has no label or unit to add
+    session$setInputs(action = list(action = "show_field", id = "c3", name = "unit"))
+    expect_equal(shown(), "c3:subject")
+  })
+})
+
 test_that("a write-in variable's + Tag offers its subject and unit, and + adds a label; the unit is offered from the database's units", {
   draft <- draft_service_update(short_gold_draft(), "variables", "v1", "variable_type", "open_ended")
   view <- list(problems = draft_service_check(draft, test_lookups()), shown = character())
@@ -746,7 +774,13 @@ test_that("Depends on lists the questions printed before it; picking one links t
     expect_match(select, '<option value="">Stands on its own</option>')
     expect_match(select, '<option value="c3">1a \u00b7 would you call yourself a nervous person?</option>', fixed = TRUE)
     expect_false(grepl('value="c4"|value="c5"', select)) # not itself, nor the questions after it
-    expect_match(text_of(html), "The earlier question this one only makes sense after", fixed = TRUE)
+    # what it means is said in a tooltip beside its name, not in a line under the field
+    expect_match(html, 'aria-label="About Depends on"', fixed = TRUE)
+    expect_match(html, "<bslib-tooltip[^>]*>.*The earlier question this one only makes sense after")
+    expect_false(grepl('class="detail-note"', html))
+    # the question's own tags are beside its number, before Depends on
+    places <- vapply(c('class="detail-row', 'data-field="printed_number"', "Question Tags", 'class="tag-box"', "Depends on"), function(what) regexpr(what, html, fixed = TRUE)[[1]], numeric(1))
+    expect_true(all(places > 0) && !is.unsorted(places))
 
     session$setInputs(edit = list(table = "components", id = "c4", field = "parent_question_id", value = "c3"))
     expect_equal(of("c4")$parent_question_id, "c3")
@@ -784,7 +818,9 @@ test_that("a variable's line is its MATR ID, response and tags, with a Label col
   view <- list(problems = draft_service_check(draft, test_lookups()), shown = character(), split = "c3")
   cards <- function(draft) htmltools::renderTags(variable_cards(component(draft, "c3"), draft, view, test_lookups(), shiny::NS("x")))$html
   html <- cards(draft)
-  expect_match(text_of(html), "MATR ID Response Tags", fixed = TRUE)
+  expect_match(text_of(html), "MATR ID Response Option Set Variable Tags", fixed = TRUE)
+  expect_match(html, 'data-label="Response Option Set"', fixed = TRUE) # a phone shows each cell's name instead of the column names
+  expect_match(html, 'data-label="Variable Tags"', fixed = TRUE)
   expect_false(grepl("Subject|Label|Kind", regmatches(html, regexpr('<div class="variable-line variable-head".*?</div>', html))))
   expect_false(grepl('data-field="variable_type"|variable-card-number', html))
   # + Variable is at the bottom of the details, not under the variables
@@ -803,7 +839,7 @@ test_that("a variable's line is its MATR ID, response and tags, with a Label col
   expect_match(html, 'data-action="hide_field" data-id="v1" data-name="subject"') # its ×
   timed <- draft_service_update(about, "variables", "v1", "time_frame", "During the last 30 days")
   html <- cards(timed)
-  expect_match(html, '<span class="tag-pill is-time_frame">\\s*<input type="text" class="form-control form-control-sm tag-pill-input" value="past 30 days"')
+  expect_match(html, '<span class="tag-pill is-time_frame">\\s*<input type="text" class="form-control form-control-sm tag-pill-input" value="past month"')
   # a label is a column, there once a variable has one; the other's cell there is empty
   labelled <- draft_service_update(timed, "variables", "v1", "label", "Smokes now")
   html <- cards(labelled)

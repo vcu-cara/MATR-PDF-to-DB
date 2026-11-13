@@ -18,8 +18,12 @@ test_that("the questionnaire is a table: a row for each variable with its MATR I
   expect_equal(row$tags, "")
   choices <- draft_service_children(draft, "response_options", first$id)
   expect_equal(row$coding[[1]], paste(choices$code_value, "=", choices$answer_option)) # each choice on its own line
-  children <- draft$variables[draft$variables$subject %in% "children", ][1, ]
+  # a tag of the question's own is said on each of its variables' rows
+  about_children <- draft$components$id[draft$components$subject %in% "children"][1]
+  children <- draft$variables[draft$variables$component_id %in% about_children, ][1, ]
   expect_match(rows$tags[rows$matr_id %in% children$matr_id][1], "[children]", fixed = TRUE)
+  # and a variable's own tag comes before its question's of the same kind
+  expect_equal(preview_variable_tags(list(label = NA, unit = NA, time_frame = "past 30 days", subject = NA), list(time_frame = "lifetime", subject = "twins")), "[past 30 days] [twins]")
   # each row names the sections and groups it is in
   around <- draft$components[draft$components$id %in% draft_service_ancestors(draft, questions$id[1]), , drop = FALSE]
   expect_gt(nrow(around), 0)

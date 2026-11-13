@@ -485,12 +485,49 @@ extraction_model_is_pdf <- function(path) {
 }
 
 # Count a PDF's pages.
-# Counts the page objects the PDF lists in plain view. PDFs that pack them into
-# compressed streams show none.
+# The PDF's page tree says how many pages it has (`/Type /Pages ... /Count 8`; a tree of trees gives several
+# counts, and the whole is the largest). Most PDFs pack the tree into compressed object streams, so those are
+# unpacked and looked through as well. Counting the page objects themselves is only the fallback: a PDF saved
+# again after an edit (a redaction) keeps the old copies of the pages it changed, so it holds more page objects
+# than pages, and Gemini, asked for pages that aren't there, records the last ones a second time.
 # path: The PDF.
 # Returns: The count, or `NULL` (unknown, not 0) if none were found.
 extraction_model_page_count <- function(path) {
   bytes <- readBin(path, "raw", file.size(path))
+  counts <- unlist(lapply(c(list(bytes), pdf_object_streams(bytes)), pdf_page_tree_counts))
+  if (length(counts) > 0) {
+    return(max(counts))
+  }
   n_pages <- length(grepRaw("/Type[[:space:]]*/Page[^s]", bytes, all = TRUE))
   if (n_pages > 0) n_pages
+}
+
+# The page counts of the page trees written in `bytes`: the `/Count` of every dictionary that is a `/Pages`.
+pdf_page_tree_counts <- function(bytes) {
+  bytes[bytes == as.raw(0)] <- as.raw(32) # a string can't hold a nul
+  text <- rawToChar(bytes)
+  Encoding(text) <- "bytes"
+  count <- "/Count[[:space:]]+([0-9]+)"
+  type <- "/Type[[:space:]]*/Pages(?![A-Za-z])"
+  found <- regmatches(text, gregexpr(
+    sprintf("%s[^<>]{0,400}?%s|%s[^<>]{0,400}?%s", type, count, count, type), text,
+    perl = TRUE, useBytes = TRUE
+  ))[[1]]
+  as.integer(sub(sprintf(".*%s.*", count), "\\1", found, perl = TRUE, useBytes = TRUE))
+}
+
+# The PDF's compressed object streams, unpacked. One that can't be unpacked is left out.
+pdf_object_streams <- function(bytes) {
+  starts <- grepRaw("stream\r?\n", bytes, all = TRUE)
+  starts <- starts[vapply(starts, function(at) {
+    length(grepRaw("/ObjStm", bytes[max(1, at - 300):at], fixed = TRUE)) > 0
+  }, logical(1))]
+  Filter(Negate(is.null), lapply(starts, function(at) {
+    from <- at + 6 + (bytes[at + 6] == as.raw(13)) + 1 # after "stream" and its line end
+    to <- grepRaw("endstream", bytes, offset = from, fixed = TRUE)
+    if (length(to) == 0) {
+      return(NULL)
+    }
+    tryCatch(memDecompress(bytes[from:(to - 1)], "gzip"), error = function(problem) NULL)
+  }))
 }

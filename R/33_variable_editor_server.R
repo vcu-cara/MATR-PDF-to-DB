@@ -34,14 +34,20 @@ variable_editor <- function(draft, change, redraw, ns) {
 
   # The question a variable or choice belongs to.
   question_of <- function(table, id) {
+    if (table == "components") {
+      return(id) # a question's own tag
+    }
     now <- draft()
     variable <- if (table == "variables") id else now$response_options$variable_id[now$response_options$id %in% id]
     now$variables$component_id[now$variables$id %in% variable]
   }
 
-  # The table an optional field is in (a variable's subject, time frame, label and unit), or NULL for a field that
-  # isn't optional.
-  optional_table <- function(name) {
+  # The table an optional field of the row `id` is in: a variable's subject, time frame, label and unit, or a
+  # question's own subject and time frame (its block's). NULL for a field that isn't optional there.
+  optional_table <- function(name, id) {
+    if (id %in% draft()$components$id) {
+      return(if (name %in% names(question_tag_fields_named)) "components")
+    }
     if (name %in% names(optional_variable_fields)) "variables"
   }
 
@@ -136,7 +142,7 @@ variable_editor <- function(draft, change, redraw, ns) {
   # An optional field added to a variable shows, empty, with the cursor in it; its question is drawn again for
   # it. It stays until everything is drawn again from scratch, unless something is typed into it.
   show_field <- function(id, name) {
-    table <- optional_table(name)
+    table <- optional_table(name, id)
     if (is.null(table)) {
       return()
     }
@@ -147,7 +153,7 @@ variable_editor <- function(draft, change, redraw, ns) {
 
   # The delete button of an optional field: it is emptied (a change Undo takes back) and hidden again.
   hide_field <- function(now, id, name) {
-    table <- optional_table(name)
+    table <- optional_table(name, id)
     if (is.null(table)) {
       return()
     }

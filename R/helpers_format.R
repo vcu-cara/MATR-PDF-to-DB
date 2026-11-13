@@ -2,8 +2,12 @@
 # about MATR's data or about Shiny.
 
 # ------ Times, sizes and lists -----------------------------------------------------
+# The time zone every time on the site is said in. The registry's staff are in Virginia, so it is Eastern time
+# wherever the server running the site is (Posit Connect's clock is in UTC, which read five hours ahead).
+site_time_zone <- "America/New_York"
+
 # A time as the app keeps it.
-# Times are kept as text in UTC, e.g. `"2026-09-29T14:03:22Z"`, and shown in local time.
+# Times are kept as text in UTC, e.g. `"2026-09-29T14:03:22Z"`, and shown in the site's time zone.
 format_time <- function(time) {
   format(time, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
 }
@@ -19,6 +23,17 @@ parse_time <- function(text) {
   )
 }
 
+# The time of day, in the site's time zone.
+# For example "9:15 AM".
+clock_time <- function(time) {
+  sub("^0", "", format(time, "%I:%M %p", tz = site_time_zone))
+}
+
+# The day a time falls on, in the site's time zone.
+site_date <- function(time) {
+  as.Date(time, tz = site_time_zone)
+}
+
 # How long ago, in words.
 # For example "just now", "5 minutes ago", "2 hours ago", "yesterday", "on Sep 29".
 time_ago <- function(time, now = Sys.time()) {
@@ -29,7 +44,7 @@ time_ago <- function(time, now = Sys.time()) {
   if (minutes < 60) {
     return(plural(floor(minutes), "minute", "ago"))
   }
-  if (as.Date(time, tz = "") == as.Date(now, tz = "")) {
+  if (site_date(time) == site_date(now)) {
     return(plural(floor(minutes / 60), "hour", "ago"))
   }
   day_phrase(time, now)
@@ -38,16 +53,17 @@ time_ago <- function(time, now = Sys.time()) {
 # The day of a time, in words.
 # For example "today at 9:15 AM", "yesterday", "on Sep 29", or "on Sep 29, 2024" in another year.
 day_phrase <- function(time, now = Sys.time()) {
-  days <- as.numeric(as.Date(now, tz = "") - as.Date(time, tz = ""))
+  days <- as.numeric(site_date(now) - site_date(time))
   if (days == 0) {
-    return(paste("today at", sub("^0", "", format(time, "%I:%M %p", tz = ""))))
+    return(paste("today at", clock_time(time)))
   }
   if (days == 1) {
     return("yesterday")
   }
-  day <- paste("on", format(time, "%b", tz = ""), as.integer(format(time, "%d", tz = "")))
-  if (format(time, "%Y", tz = "") != format(now, "%Y", tz = "")) day <- paste0(day, ", ", format(time, "%Y", tz = ""))
-  day
+  day <- site_date(time)
+  said <- paste("on", format(day, "%b"), as.integer(format(day, "%d")))
+  if (format(day, "%Y") != format(site_date(now), "%Y")) said <- paste0(said, ", ", format(day, "%Y"))
+  said
 }
 
 # A number of seconds in words.

@@ -231,13 +231,9 @@
 }
 .problem-pop-more { list-style: none; color: $vcu-gray; }
 
-// ------ Normalize ---------------------------------------------------------------------------
-// Answer choices to word as the database does
-.normalize {
-  > .request-section:first-child { margin-top: 0; }
-  .normalize-table {
-    font-size: $font-size-sm;
-    th, td { padding: 0.35rem 0.75rem; vertical-align: middle; }
-    .is-count { text-align: right; font-variant-numeric: tabular-nums; }
-  }
+// ------ Wordings other places print too -------------------------------------------------------
+// In the Push dialog of a reopened wave: each reworded block, with Only here / Everywhere
+.edit-extraction-rewordings .rewordings-table {
+  font-size: $font-size-sm;
+  th, td { padding: 0.35rem 0.75rem; vertical-align: middle; }
 }

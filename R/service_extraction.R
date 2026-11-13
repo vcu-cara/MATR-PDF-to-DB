@@ -161,6 +161,28 @@ extraction_service_reextract_wave <- function(connection, wave_id, place, me, no
   extraction_model_create(connection, new_ai_record(me, pdf, supplement, info, now))
 }
 
+# ------ Editing a wave's extraction again ------------------------------------------------------------
+# Bring what a wave asks back to the Edit Extraction page (Make an edit > the wave > Edit extraction): a new
+# draft holding the wave's blocks, questions, variables and choices as the catalog has them now, going into the
+# same wave, with the wave's PDF beside it (`public.reopen_wave()`). Nothing in the catalog changes until the
+# draft is pushed; then it replaces what the wave asks, in one step. A block whose words were changed, when
+# other places print the same wording, is changed everywhere or only here as staff choose in the push dialog
+# (`extraction_service_rewordings()`). Asked for again while the draft is open, it is the same draft.
+# wave_id: The wave.
+# me: Who asks: `list(staff_id, name, role)`.
+# Returns: The draft's record. An error with the database's sentence for a wave that asks nothing yet.
+extraction_service_reopen_wave <- function(connection, wave_id, me) {
+  id <- database_model_call(connection, "reopen_wave", list(
+    p_wave_id = database_number(wave_id), p_staff_id = database_number(me$staff_id)
+  ))
+  extraction_model_get(connection, database_number(id))
+}
+
+# The wave a draft was reopened from, whose questions it replaces when it is pushed there; "" for any other.
+extraction_service_updates_wave <- function(record) {
+  as.character(record$info$updates_wave_id %||% "")
+}
+
 # Start a Manual draft: the questionnaire is typed by hand.
 # There is no reading. The PDF is optional: if staff give one, it is kept with the draft so the
 # Edit Extraction page can show it beside what they type. The questionnaire starts empty.
@@ -471,6 +493,8 @@ extraction_required_fields <- c(
 # question_counts: How many questions each of the questionnaire's waves asks: a named integer
 #   vector by wave id (`questionnaire_service_wave_question_counts()`).
 # records: All the extraction records, to find other drafts going into the same wave.
+# A draft reopened from the wave (`extraction_service_reopen_wave()`) is the exception: pushing it replaces
+# what the wave asks, so the wave's questions aren't in its way.
 # id: This draft's id, so it doesn't clash with itself.
 # me: Who is using the site, `list(staff_id, name)`, so a clash with their own draft says "You".
 # Returns: A sentence saying what to do, or `NULL`.
@@ -484,7 +508,9 @@ extraction_service_recorded_wave_problem <- function(info, catalog, question_cou
     return("Pick one of this questionnaire's waves.")
   }
   n_questions <- question_counts[info$wave_id]
-  if (isTRUE(n_questions > 0)) {
+  own <- Filter(function(record) identical(record$id, id), records)
+  replaces_it <- length(own) > 0 && identical(extraction_service_updates_wave(own[[1]]), info$wave_id)
+  if (isTRUE(n_questions > 0) && !replaces_it) {
     return(sprintf(
       "%s already asks %s. Empty the wave first (Metadata page), or pick a wave without questions.",
       wave$name, plural(n_questions, "question")

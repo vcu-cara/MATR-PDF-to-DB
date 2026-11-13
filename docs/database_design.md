@@ -69,8 +69,14 @@ kept.
 
 **Tags.** `subject` and `time_frame` were tables, and `unit` a text column of `open_ended`. They are one
 list, `tag`, with a `kind`, and three link tables so a tag can sit on a question (`placement_tag`), a
-variable (`variable_tag`) or a single response option (`response_option_tag`). The push writes a variable's
-`subject`, `time_frame` and `unit`; the other two levels are there for the editor.
+variable (`variable_tag`) or a single response option (`response_option_tag`). A tag is said once: who and
+when go on the **question** when they are about all of it ("have you smoked?" [lifetime]) and on each
+**variable** when the question's variables differ (the same question's answers for [twin a] and [twin b], or
+for [lifetime] and [past year]); a kind of tag is never on a question and on its variables at once, and
+a unit is always a variable's. So whoever reads a variable's tags reads its question's too (`variable_tag`,
+then `placement_tag` for the kinds the variable hasn't got). The site keeps this when a draft is opened and
+saved (`draft_service_place_tags()`), and drops a variable's label that only repeats one of its tags. The
+push writes a question's `subject` and `time_frame` and a variable's `subject`, `time_frame` and `unit`.
 
 **Open-ended variables and `answer_data_type`.** A question with two blanks ("___ feet ___ inches") is two
 MATR IDs, so two variables, each with its own data type and unit tag; that is one row per MATR ID, not a
@@ -83,9 +89,18 @@ to change and shows up in the table editor; an enum type buys nothing here.
 tagging is built), `component_type` (nine fixed kinds are a check constraint), `question`/`question_stem`
 (see normalization) and `wave_file` (folded into `wave`).
 
-**Normalization of question text.** The printed words stay verbatim (lower case) in `component.text`,
-because researchers want to see how a question was printed. Each wording is one component, so the dashboard
-groups a question by its component, and finds questions that ask the same thing in other words by meaning: an
+**Normalization of question text.** `component.text` says what was asked in the registry's plain words, not
+how the page printed it (the dashboard links each questionnaire's PDF for that): one complete sentence
+("Height?" is "what is your height?"), without the time or the one-of-several people it asks about (those
+are tags), without padding ("in general,", "if any,") and without directions on how to mark an answer. A
+grid's lead-in and each of its items read as one sentence. So the same question in two questionnaires is
+the same component, told apart by its tags. The extraction prompt (`prompts/extraction.md`) writes it that
+way; text that only says how to answer, or only announces what comes next, isn't extracted at all. A form
+that asks the same questions about one person and then another (a section about twin A, then twin B) is one
+question each, with a variable per person, joined when the AI's answer is opened
+(`draft_service_join_repeats()`); such a question has every printed number ("8, 24"). Each wording is one
+component, so the dashboard groups a question by its component, and finds questions that ask the same thing
+in other words by meaning: an
 embedding of each question in `question_embedding`, kept up to date by the database (`sql/8_search.sql`).
 Answer choices are normalized the same way (`private.normal_answer`, mirrored by
 the site's `normal_answer()`), and tags by the site before they become rows of `tag`: a subject is the
@@ -101,6 +116,19 @@ more, sections left empty, the components they printed that nothing prints any m
 them). Answer options and tags stay: they are vocabulary. Each writes a history row. Re-extract on a wave = empty it, then start an
 AI-Powered extraction from the wave's PDF.
 
+**Editing a pushed wave again.** `reopen_wave` makes a new Draft extraction holding what the wave asks as the
+catalog has it now (so edits made on Make an edit since the push are in it), going into the same wave; its
+`info.updates_wave_id` names the wave. Nothing changes until it is pushed: then `push_extraction` replaces
+what the wave asks in one transaction (the wave's questions go, the placements no wave asks any more go, the
+draft is pushed, and components nothing prints any more are forgotten afterwards, so a wording the update
+still prints keeps its component). Each block of such a draft names the component it came from
+(`component_id`). A block reworded when nothing else prints its component renames the component. When other
+places print it too (another questionnaire, or another block of this one), staff choose in the Push dialog:
+**only here** (the default) gives this place a new component and leaves the old one to the others;
+**everywhere** (`"reword": "everywhere"`) renames the component itself, or, if the new words are a component
+already, points every place at that one. The extraction the wave was first pushed from is kept as it was.
+Variables of a placement another wave still asks are not rewritten by an update (they are that wave's too).
+
 **Multiple waves of one questionnaire.** A push into a second wave reuses the placements the questionnaire
 already has (same component under the same parent) and the variables with the same MATR ID on that
 question, and only adds `wave_question` rows for the new wave.
@@ -109,9 +137,10 @@ question, and only adds `wave_question` rows for the new wave.
 
 | Function | Does |
 | --- | --- |
-| `push_extraction(p_extraction_id, p_staff_id, p_dry_run default false)` | writes an extraction's JSON into the catalog; the wave must ask nothing yet; marks the extraction Pushed; writes history. Returns counts. With `p_dry_run`, does it and undoes it, returning the counts (the preview). |
+| `push_extraction(p_extraction_id, p_staff_id, p_dry_run default false)` | writes an extraction's JSON into the catalog; the wave must ask nothing yet, unless the extraction was reopened from it (then it replaces what the wave asks); marks the extraction Pushed; writes history. Returns counts, each row counted once however often the extraction uses it (`tag_reused` is how many different tags were already there), with the `names` of the tags, answer choices and option sets it adds and finds and of the questions the database had already. An option set is the choices one variable offers, whatever their order or codes; there is no table of them, so the push works them out from `response_option`. With `p_dry_run`, does it and undoes it, returning the same (the preview). |
 | `apply_change(p_staff_id, p_items, p_summary)` | applies a Make-an-edit item list (Insert/Update/Delete with `new:<table>:<n>` tokens, old-value checks) in one transaction; writes one history row. Returns `{history_id, new_ids}`. |
 | `empty_wave(p_wave_id, p_staff_id)`, `empty_questionnaire(...)`, `empty_study(...)`, `empty_registry(...)` | see Emptying. Return counts. |
+| `reopen_wave(p_wave_id, p_staff_id)` | see Editing a pushed wave again. Returns the draft's `extraction_id` (the same one while that draft is open). |
 | `upvote_questionnaire(p_questionnaire_id)` | the dashboard's upvote (anon). |
 
 Everything else is plain REST on the tables: the site inserts, patches and deletes `extraction` rows
@@ -123,13 +152,16 @@ directly (a PATCH filtered on `revision=eq.<n>` is the optimistic lock; the `ext
 ```
 {"questionnaire": {"name", "abbreviation"}, "components": [block, ...]}
 block:    {"component_type", "text", "printed_number", "question_number", "parent_question",
-           "variables": [variable, ...], "children": [block, ...], "checked", "ref", "page"}
+           "subject", "time_frame",                      (a question's own tags)
+           "variables": [variable, ...], "children": [block, ...], "checked", "ref", "page",
+           "component_id", "reword"}                     (a reopened wave's blocks only)
 variable: {"variable_type", "matr_id", "label", "subject", "time_frame", "unit", "answer_data_type",
            "response_options": [choice, ...], "ref"}
 choice:   {"answer_option", "code_value", "ref"}   (may also carry "unit"/"time_frame"/"subject")
 ```
 
-`parent_question` is the `question_number` of the question this one depends on. Gone from the JSON:
+`parent_question` is the `question_number` of the question this one depends on. `printed_number` is free text
+and may list several ("8, 24": one question joined from two). Gone from the JSON:
 `self_contained`, `condition`, `skip_condition`, `skip_when`, `skip_instruction`, `skip_to`, `skip_to_end`,
 `parent_from_skip`, `stem`, `respondent_count`. The push ignores keys it doesn't know, so an old draft still
 pushes.

@@ -17,11 +17,17 @@ tag_entity <- list(
   group = "Shared lists", table = "tag",
   about = paste0(
     "A word a researcher can filter by, put on a question, a variable or an answer choice: a subject (who the ",
-    "answer is about, like “twin”), a time frame (like “past 30 days”) or a unit (like ",
+    "answer is about, like “twin”), a time frame (like “past month”) or a unit (like ",
     "“pounds”), each written one way. The Edit Extraction page offers these, and an extraction adds any other it finds."
   ),
-  update_about = "A tag is shared. Renaming it renames it everywhere it is used.",
-  delete_about = "A tag can only be deleted once nothing carries it. Until then it can be renamed instead.",
+  update_about = paste(
+    "A tag is shared. Renaming it renames it everywhere it is used. Giving it the name of another tag of its kind",
+    "merges it into that one: everything that carries it carries the other instead."
+  ),
+  delete_about = paste(
+    "A tag can only be deleted once nothing carries it. Until then it can be renamed, or merged into another tag",
+    "by giving it that tag's name."
+  ),
   reads = c("variable", "placement", "component", "answer_option"),
   cards = function(snap, scope) {
     rows <- snap$tag
@@ -43,23 +49,31 @@ tag_entity <- list(
       edit_field("name", "Name",
         required = TRUE, placeholder = "e.g. parents, past six months, pounds",
         normalize = function(value) edit_tag_name(if (!is.null(row)) row$kind, value),
-        hint = "Written one way: “Respondent’s Twin” is saved as “twin”, “during the last 12 months” as “past 12 months”.",
+        hint = "Written one way: “Respondent’s Twin” is saved as “twin”, “during the last 12 months” as “past year”.",
+        # a new tag can't have the name of one of its kind; a tag renamed to one is merged into it
         problem = function(value, values) {
           kind <- if (has_text(values$kind)) values$kind else row$kind
-          if (!has_text(value) || !has_text(kind)) {
+          if (mode == "update" || !has_text(value) || !has_text(kind)) {
             return(NULL)
           }
           same <- edit_taken(snap, "tag", "name", edit_tag_name(kind, value), row, within = list(kind = kind))
           if (nrow(same) > 0) sprintf("“%s” is already in the list of %ss.", same$name[1], kind)
+        },
+        warn = function(value, values) {
+          merge <- if (mode == "update") tag_merge(snap, row, value)
+          if (!is.null(merge)) merge$sentence
         }
       )
     )
   },
+  # a tag given the name of another of its kind is merged into it
+  merge = function(snap, row, values) tag_merge(snap, row, values[["tag__name"]]),
   # a new tag's name is written its kind's way, which the form only knows once the kind is picked
   build = function(mode, snap, row, scope, fields, values) {
     entity <- edit_entities$tag
     if (mode == "update") {
-      return(edit_update_items(entity, snap, row, fields, values))
+      merge <- tag_merge(snap, row, values[["tag__name"]])
+      return(if (is.null(merge)) edit_update_items(entity, snap, row, fields, values) else tag_merge_items(snap, row, merge$into))
     }
     kind <- values[["tag__kind"]]
     fields <- lapply(fields, function(field) {
@@ -76,6 +90,65 @@ tag_entity <- list(
     ))
   }
 )
+
+# ------ * Merging two tags ------------------------------------------------------------------------------
+# The tables that put a tag on something.
+tag_link_tables <- c("placement_tag", "variable_tag", "response_option_tag")
+
+# What renaming a tag to the name of another tag of its kind comes to: the two are merged.
+# Left as it is, a tag merges into nothing, even when its name is one the site now writes as another tag's ("past
+# 12 months" beside "past year"): an edit changes only what staff changed.
+# row: The tag being changed.
+# name: What is typed as its name.
+# Returns: `NULL` unless the name, written its kind's way, is another tag's of the same kind. Then a list: `into`
+#   (that tag's row), `key` (its key, to show it afterwards), `from` and `into_name` (the two names), `sentence`
+#   (what saving does, for the form and the dialog) and `summary` (for the history).
+tag_merge <- function(snap, row, name) {
+  if (is.null(row) || !has_text(name) || identical(trimws(name), trimws(row$name))) {
+    return(NULL)
+  }
+  into <- edit_taken(snap, "tag", "name", edit_tag_name(row$kind, name), row, within = list(kind = row$kind))
+  if (nrow(into) == 0) {
+    return(NULL)
+  }
+  into <- into[1, , drop = FALSE]
+  carried <- vapply(tag_link_tables, function(table) sum(key_text(snap[[table]]$tag_id) == key_text(row$tag_id)), numeric(1))
+  moved <- word_list(mapply(plural_noun, carried[carried > 0], names(carried)[carried > 0]))
+  what_moves <- if (sum(carried) > 0) {
+    sprintf("%s move%s to “%s”, and “%s” is removed.", moved, if (sum(carried) == 1) "s" else "", into$name, row$name)
+  } else {
+    sprintf("nothing carries “%s”, so it is only removed.", row$name)
+  }
+  list(
+    into = into, key = key_text(into$tag_id), from = row$name, into_name = into$name,
+    sentence = sprintf("“%s” is already in the list of %ss. Saving merges this tag into it: %s", into$name, row$kind, what_moves),
+    summary = paste0("Merged the tag “", row$name, "” into “", into$name, "”", if (sum(carried) > 0) paste0(", moving ", moved))
+  )
+}
+
+# The items of merging the tag `row` into the tag `into`: whatever carries `row` carries `into` instead (once, if
+# it had both), and `row` goes, written field by field as a delete is.
+tag_merge_items <- function(snap, row, into) {
+  items <- list()
+  for (table in tag_link_tables) {
+    links <- snap[[table]]
+    carrier <- setdiff(edit_table_key(table), "tag_id")
+    carried <- links[key_text(links$tag_id) == key_text(row$tag_id), , drop = FALSE]
+    has_other <- edit_key(links[key_text(links$tag_id) == key_text(into$tag_id), , drop = FALSE], carrier)
+    for (i in seq_len(nrow(carried))) {
+      link <- carried[i, , drop = FALSE]
+      items[[length(items) + 1]] <- edit_item(table, edit_row_identifier(table, link), "Delete", NA, NA, NA)
+      if (!edit_key(link, carrier) %in% has_other) {
+        link$tag_id <- into$tag_id
+        items[[length(items) + 1]] <- edit_item(table, edit_row_identifier(table, link), "Insert", NULL, NA, NA)
+      }
+    }
+  }
+  for (column in setdiff(names(database_tables$tag$columns), database_tables$tag$key)) {
+    items[[length(items) + 1]] <- edit_item("tag", edit_row_identifier("tag", row), "Delete", column, row[[column]], NA)
+  }
+  do.call(rbind, items)
+}
 
 # ------ Measurement scales -------------------------------------------------------------------------------
 measurement_scale_entity <- list(

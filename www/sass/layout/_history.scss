@@ -23,6 +23,27 @@
   margin-top: 1.25rem;
   h3 { margin: 0 0 0.5rem; font-size: $font-size-base; }
 }
+// A chip that lists what it counts when pointed at (the option sets, answer choices or tags a push adds or
+// finds), and its tooltip: every name with a bullet of its own, in columns as long as its class says (is-rows-23,
+// from request_names_ui(), at most request_names_per_column there: 30), the tooltip as wide as its names so none
+// wraps until the screen has no more room
+.row-badge.has-list { cursor: help; text-decoration: underline dotted; text-underline-offset: 0.15em; }
+.list-tooltip {
+  --bs-tooltip-max-width: 96vw;
+  // small type, so a column of thirty names is about half a screen tall
+  .tooltip-inner { width: max-content; max-width: 96vw; padding: 0.5rem 0.75rem; font-size: $font-size-xs; line-height: 1.35; text-align: left; }
+  .list-tooltip-lines {
+    display: grid;
+    grid-auto-flow: column;
+    column-gap: 2rem;
+    margin: 0;
+    padding-left: 1.1rem;
+    @for $rows from 1 through 30 {
+      &.is-rows-#{$rows} { grid-template-rows: repeat(#{$rows}, auto); }
+    }
+  }
+}
+
 .request-cards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));

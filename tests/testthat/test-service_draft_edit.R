@@ -108,7 +108,7 @@ test_that("what staff type is stored as the column's type, blanks as NA", {
   expect_identical(draft_service_update(draft, "variables", "v1", "matr_id", "Q1A")$variables$matr_id[1], "Q1A") # not words
   expect_identical(
     draft_service_update(draft, "variables", "v1", "time_frame", "Over the past twelve months")$variables$time_frame[1],
-    "past 12 months"
+    "past year"
   )
   expect_error(draft_service_update(draft, "components", "c3", "id", "c9"), "can't be changed")
   # the fields that went with skips, conditions and respondent counts can't be typed into
@@ -162,6 +162,23 @@ test_that("every choice is printed: there is no field to say one isn't, and a lo
   opened <- draft_service_from_json(json)
   expect_equal(opened$response_options$answer_option, "yes")
   expect_null(draft_service_to_json(opened)$components[[1]]$variables[[1]]$response_options[[1]][["printed"]])
+})
+
+test_that("F typed among grades stays a grade; M and F typed as a variable's only choices are the sexes", {
+  json <- list(components = list(list(
+    component_type = "Question", text = "What is your average school grade?",
+    variables = list(list(variable_type = "closed_ended", response_options = list(
+      list(answer_option = "D-"), list(answer_option = "Fail")
+    )))
+  )))
+  draft <- draft_service_from_json(json)
+  answers <- function(draft) draft$response_options$answer_option
+  graded <- draft_service_update(draft, "response_options", "o2", "answer_option", "F")
+  expect_equal(answers(graded), c("d-", "f"))
+
+  one_sex <- draft_service_update(graded, "response_options", "o1", "answer_option", "M") # with F, they are the sexes
+  expect_equal(answers(one_sex), c("male", "female"))
+  expect_equal(answers(draft_service_update(one_sex, "response_options", "o2", "answer_option", "F")), c("male", "female"))
 })
 
 test_that("a question keeps the number printed beside it as staff type it; its place follows the outline", {

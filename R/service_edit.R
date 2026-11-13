@@ -356,16 +356,22 @@ edit_date_problem <- function(text) {
 
 # ------ What changed ------------------------------------------------------------------------------------------------
 # The fields that differ from how the row started.
-# Only for an update. A field that is no longer shown counts as emptied.
+# Only for an update. A field that is no longer shown counts as emptied. A field left as it started never
+# differs, even when the row holds it in a way the site no longer writes (a tag named "past 30 days", now written
+# "past month"): an edit changes only what staff changed. Retyped into the way it is written now, it does differ
+# from what the row holds, so the row can be brought up to date.
 # initial: What the fields started with (`edit_service_initial()`).
 # Returns: A data frame with `id`, `name`, `label`, `short`, `type`, `old` and `new` (as
 #   shown) and `old_value` and `new_value` (as saved); no rows if nothing changed.
 edit_service_changes <- function(fields, initial, values) {
   unlocked <- Filter(function(field) is.null(field$locked), fields)
   rows <- lapply(unlocked, function(field) {
-    was <- edit_service_normalize(field, initial[[field$id]])
+    # what the row holds, which is what the change is from; and that as the site writes it now
+    was <- edit_service_normalize(utils::modifyList(field, list(normalize = NULL)), initial[[field$id]])
+    written <- edit_service_normalize(field, initial[[field$id]])
     now <- if (edit_service_visible(field, values)) edit_service_normalize(field, values[[field$id]]) else NA_character_
-    if (identical(was, now)) {
+    retyped <- !identical(trimws(values[[field$id]] %||% ""), trimws(initial[[field$id]] %||% ""))
+    if (identical(was, now) || (identical(written, now) && !retyped)) {
       return(NULL)
     }
     data.frame(
@@ -476,7 +482,8 @@ edit_service_word_diff <- function(old, new) {
 # values: What is in the form: a named list of strings by field id. Not for a delete.
 # plan: For a delete, the plan if it is already worked out.
 # Returns: A list: `items` (numbered, in the order to apply them) and `summary` (one sentence for the history); a
-#   delete also has its `plan`. An error with a sentence if an add or an update would change something while its
+#   delete also has its `plan`, and an update that merges the row into another its `merge` (what the kind's
+#   `merge()` gives: at least `summary`, `sentence` and `key`, the row it is merged into). An error with a sentence if an add or an update would change something while its
 #   form still has a field to fill in or fix: the page only builds a checked form, but a caller that builds one
 #   itself (`edit_service_quick_add()`) is checked here too.
 edit_service_build <- function(entity, mode, snap, row = NULL, scope = NULL, fields = NULL, values = NULL, plan = NULL) {
@@ -496,14 +503,18 @@ edit_service_build <- function(entity, mode, snap, row = NULL, scope = NULL, fie
   }
   # an update that changes nothing writes nothing, whatever its form holds
   if (NROW(items) > 0) edit_refuse_unchecked(edit_service_check(fields, values))
-  summary <- if (mode != "add") {
+  # an update that merges the row into another (a tag renamed to another tag's name) says so itself
+  merge <- if (mode == "update" && !is.null(entity$merge)) entity$merge(snap, row, values)
+  summary <- if (!is.null(merge)) {
+    merge$summary
+  } else if (mode != "add") {
     edit_summary_update(entity, snap, row, fields, values)
   } else if (!is.null(entity$summary_add)) {
     entity$summary_add(snap, scope, fields, values)
   } else {
     edit_summary_add(entity, snap, fields, values)
   }
-  list(items = edit_number_items(items), summary = summary)
+  c(list(items = edit_number_items(items), summary = summary), if (!is.null(merge)) list(merge = merge))
 }
 
 # Stops with what is left to fill in or fix, if anything is.

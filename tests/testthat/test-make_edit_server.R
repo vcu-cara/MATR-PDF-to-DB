@@ -147,6 +147,33 @@ test_that("an add that looks like something there asks first, and can go ahead a
   })
 })
 
+test_that("renaming a tag to another tag's name asks before merging them, then shows the one that is left", {
+  me <- local_staff()
+  seen <- local_browser()
+  from <- local_row("tag", list(kind = "unit", name = normal_unit(test_name("old boxes"))), "tag_id")
+  into <- local_row("tag", list(kind = "unit", name = normal_unit(test_name("boxes"))), "tag_id")
+  page <- page_args(me)
+  shiny::testServer(make_edit_server, args = page$args, {
+    errors <- collect_errors(session)
+    pick(session, "tag", from$tag_id)
+    press(session, "edit")
+    draw_form()
+    session$setInputs(`change-tag__name` = toupper(into$name))
+    expect_true(change$ready())
+    session$setInputs(submit = 1)
+    expect_null(done()) # it asks first
+    expect_match(seen$modals[[1]], "Merge these tags")
+    expect_match(seen$modals[[1]], into$name, fixed = TRUE)
+    session$setInputs(confirm_merge = 1)
+    expect_match(done()$summary, "^Merged the tag")
+    press(session, "back")
+    expect_equal(picked(), key_text(into$tag_id)) # the tag it went into
+    expect_length(errors(), 0)
+  })
+  expect_equal(nrow(table_model_get(test_connection, "tag", list(tag_id = database_eq(from$tag_id)))), 0)
+  expect_equal(nrow(table_model_get(test_connection, "tag", list(tag_id = database_eq(into$tag_id)))), 1)
+})
+
 test_that("going to another item while a form is open asks first", {
   me <- local_staff()
   seen <- local_browser()
@@ -318,4 +345,12 @@ test_that("a wave's Re-extract is off until it was extracted from a PDF, and the
     expect_match(detail, 'data-action="reextract_wave" disabled')
     expect_null(session$returned)
   })
+})
+
+test_that("a wave that asks questions offers Edit extraction, and one that asks none says why not", {
+  html <- function(asks) as.character(wave_edit_extraction_button(asks))
+  expect_match(html(TRUE), 'data-action="edit_wave_extraction"', fixed = TRUE)
+  expect_false(grepl("disabled", html(TRUE)))
+  expect_match(html(FALSE), "disabled")
+  expect_match(html(FALSE), "asks no questions yet")
 })

@@ -219,7 +219,26 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   > .is-wide { grid-column: 1 / -1; }
 }
 .detail-field { min-width: 0; .form-control, .form-select { width: 100%; } }
-.detail-field .detail-number { width: 3rem; } // a question number is a few characters
+// fields side by side on one line (a question's number, then its tags in the room that is left)
+.detail-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.75rem 1rem;
+  > .detail-field:last-child { flex: 1 1 14rem; }
+}
+// the "i" beside a field's name, whose tooltip says what the field is for
+.field-help {
+  padding: 0;
+  border: 0;
+  color: $vcu-gray;
+  font-size: inherit;
+  line-height: 1;
+  vertical-align: baseline;
+  &:hover, &:focus { color: $vcu-black; }
+}
+// a question number is a few characters; one question joined from two has both ("14a, 30a")
+.detail-field .detail-number { width: 6.5rem; }
 .detail-label { display: block; margin-bottom: 0.2rem; color: $vcu-gray; font-size: $font-size-xs; font-weight: 500; }
 .detail-value { display: block; padding: 0.2rem 0; font-weight: 700; font-variant-numeric: tabular-nums; }
 .detail-note { margin: 0; color: $vcu-gray; font-size: $font-size-sm; }

@@ -79,3 +79,25 @@ respondent_type_model_get_all <- function(connection) {
     order_by = "name"
   )
 }
+
+# ------ Where components are printed --------------------------------------------------------
+# Some components as the catalog has them, and every place that prints one of them.
+# component_ids: Component ids; anything that isn't a number is left out.
+# Returns: A list: `components` (`component_id`, `kind`, `text`) and `places` (`component_id` and the
+#   `questionnaire_id` of each placement, one row for each place), ids as text.
+component_model_places <- function(connection, component_ids) {
+  ids <- unique(as.character(component_ids))
+  ids <- ids[!is.na(ids) & grepl("^[0-9]+$", ids)]
+  read <- function(table, columns) {
+    # a few at a time: the ids go in the request's address
+    parts <- lapply(split(ids, ceiling(seq_along(ids) / 150)), function(some) {
+      database_model_get(connection, table, columns, order_by = columns, filters = list(component_id = database_in(some)))
+    })
+    rows <- if (length(parts) > 0) do.call(rbind, parts) else no_rows(columns)
+    rows$component_id <- as.character(rows$component_id)
+    rows
+  }
+  places <- read("placement", c("component_id", "questionnaire_id"))
+  places$questionnaire_id <- as.character(places$questionnaire_id)
+  list(components = read("component", c("component_id", "kind", "text")), places = places)
+}

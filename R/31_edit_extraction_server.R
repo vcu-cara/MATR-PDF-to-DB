@@ -478,30 +478,19 @@ edit_extraction_server <- function(
       if (isolate(has_draft())) release_draft(isolate(record_id()))
     })
 
-    # "to fix" jumps to the next block with a problem; the Normalize dialog's buttons change the draft.
+    # "to fix" jumps to the next block with a problem; the Push dialog's Only here / Everywhere says where a
+    # reopened block's new words go.
     observeEvent(input$action, {
       action <- input$action
       switch(action$action %||% "",
         next_problem = selected(draft_service_next_problem(draft(), problems(), selected())),
-        use_choice = change_draft(normalize_service_use_choice(draft(), action$from, action$to)),
+        reword = {
+          chosen <- rewordings()
+          was <- chosen$was[match(action$id, chosen$id)]
+          change_draft(draft_service_reword(draft(), action$id, identical(action$everywhere, "true"), was = was))
+        },
         NULL
       )
-    })
-
-    # ------ Normalize -------------------------------------------------------------------------
-    # Answer choices worded as the database words them (service_normalize.R). The dialog lists them as the
-    # draft is now, so it changes as its buttons are used.
-    normalize_open <- reactiveVal(FALSE)
-
-    observeEvent(input$normalize, {
-      req(draft())
-      normalize_open(TRUE)
-      showModal(normalize_dialog(ns))
-    })
-
-    output$normalize_body <- renderUI({
-      req(normalize_open(), draft())
-      normalize_ui(ns, normalize_service_choice_suggestions(draft(), lookups$answer_options))
     })
 
     observe({
@@ -643,6 +632,18 @@ edit_extraction_server <- function(
       )
     }
 
+    # A draft reopened from a wave: the blocks reworded while other places print the same wording, each to be
+    # changed everywhere or only here (the Push dialog's choice; only here until chosen). Read when the dialog
+    # opens and again as the draft changes; none for any other draft, or if they can't be read.
+    rewordings <- reactive({
+      req(push_open(), draft())
+      tryCatch(
+        extraction_service_read_rewordings(connection, record(), draft(), catalog$get()),
+        error = function(problem) data.frame(id = character(), was = character()) # nothing to choose: each stays only here
+      )
+    })
+    output$push_rewordings <- renderUI(rewordings_ui(rewordings()))
+
     # What is in the way, above the form.
     output$push_blockers <- renderUI({
       blockers <- push_blockers()
@@ -750,7 +751,7 @@ edit_extraction_server <- function(
         return(span(class = "save-status", "All changes saved"))
       }
       invalidateLater(15000) # "Saved 30 s ago" moves on
-      span(class = "save-status", title = paste("Saved at", format(at, "%l:%M %p")), saved_ago(at))
+      span(class = "save-status", title = paste("Saved at", clock_time(at)), saved_ago(at))
     })
 
     # ------ RETURN ------------------------------------------------------------
@@ -783,7 +784,7 @@ saved_ago <- function(at, now = Sys.time()) {
   if (seconds < 3600) {
     return(sprintf("Saved %d min ago", as.integer(seconds %/% 60)))
   }
-  paste("Saved at", trimws(format(at, "%l:%M %p")))
+  paste("Saved at", clock_time(at))
 }
 
 # The browser's request for the PDF.

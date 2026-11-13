@@ -363,5 +363,5 @@ test_that("how long ago the draft was saved is said in seconds, then minutes, th
   expect_equal(saved_ago(at, at + 3), "Saved just now")
   expect_equal(saved_ago(at, at + 47), "Saved 45 s ago")
   expect_equal(saved_ago(at, at + 4 * 60 + 10), "Saved 4 min ago")
-  expect_equal(saved_ago(at, at + 2 * 3600), "Saved at 2:05 PM")
+  expect_equal(saved_ago(at, at + 2 * 3600), "Saved at 10:05 AM") # in Eastern time, whatever zone the time came in
 })

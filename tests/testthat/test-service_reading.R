@@ -9,6 +9,7 @@ as_gemini_wrote_it <- function(json) {
       list(
         component_type = block$component_type, text = block$text,
         printed_number = block$printed_number, parent_question = block$parent_question,
+        subject = block$subject, time_frame = block$time_frame, # a question's own tags
         variables = lapply(block$variables, function(box) {
           list(
             variable_type = box$variable_type, label = box$label, subject = box$subject, time_frame = box$time_frame,
@@ -114,6 +115,9 @@ test_that("tidying numbers each list, cleans the text and keeps only each block'
   instruction <- tidied$components[[1]]
   expect_equal(names(instruction), c("component_type", "display_order", "text"))
   expect_equal(instruction$text, "mark \"yes\" or \"no\"...") # and in lower case
+  # words quoted with single marks are quoted with double ones, so the two copies of a question read alike; an
+  # apostrophe isn't a quotation mark
+  expect_equal(clean_text("interrupt or 'butt in' on the twins' games, and don't stop"), "interrupt or \"butt in\" on the twins' games, and don't stop")
   asked <- tidied$components[[2]]
   expect_equal(asked$display_order, 2)
   expect_equal(asked$printed_number, "12b")
@@ -123,6 +127,21 @@ test_that("tidying numbers each list, cleans the text and keeps only each block'
   expect_null(choices[[1]]$printed_label) # how it was printed isn't kept
   expect_equal(vapply(choices, function(choice) choice$answer_option, ""), c("male", "female")) # lower case, no full stop
   expect_null(choices[[1]][["printed"]]) # every choice kept is printed, so it isn't said
+})
+
+test_that("tidying writes M and F out as the sexes, but leaves F a grade among grades", {
+  box <- function(...) {
+    list(
+      variable_type = "closed_ended", label = NULL, subject = NULL, answer_data_type = NULL,
+      response_options = lapply(c(...), function(answer) list(answer_option = answer, printed = TRUE))
+    )
+  }
+  tidied <- reading_service_tidy(list(questionnaire = list(name = "School"), components = list(
+    question("1", boxes = list(box("M", "F"))), question("2", boxes = list(box("A+", "D-", "F")))
+  )))
+  answers <- function(asked) vapply(asked$variables[[1]]$response_options, function(choice) choice$answer_option, "")
+  expect_equal(answers(tidied$components[[1]]), c("male", "female"))
+  expect_equal(answers(tidied$components[[2]]), c("a+", "d-", "f"))
 })
 
 test_that("a reading's words are kept in lower case, without a figure that repeats the number word before it", {
@@ -154,7 +173,7 @@ test_that("a reading's words are kept in lower case, without a figure that repea
   expect_equal(box$unit, "years") # its own field, abbreviation written out
   # names the database lists, numbers and the questionnaire's own name aren't the form's words
   expect_equal(box$subject, "siblings")
-  expect_equal(box$time_frame, "past 12 months") # written one way (normal_time_frame())
+  expect_equal(box$time_frame, "past year") # written one way (normal_time_frame())
   expect_equal(tidied$questionnaire, list(name = "General Nutrition Assessment", abbreviation = "GNA"))
   old_fields <- c("skip_condition", "skip_when", "skip_instruction", "condition", "self_contained")
   expect_false(any(old_fields %in% c(names(grid), names(asked), names(box))))
@@ -197,14 +216,35 @@ test_that("a block put inside one that isn't a section moves out to follow it", 
   expect_null(tidied$components[[1]]$children)
 })
 
+test_that("a section or grid recorded twice in a row with the same words is one", {
+  # its questions ran onto the next page, and Gemini started it again without saying it carried on
+  section <- function(heading, ...) list(component_type = "Section", text = heading, children = list(...))
+  grid <- function(lead_in, ...) list(component_type = "Grid", text = lead_in, children = list(...))
+  tidied <- reading_service_tidy(list(questionnaire = list(name = "Twin Diet Survey"), components = list(
+    section("About alcohol", question("1"), grid("How often", question("2a"))),
+    section("ABOUT ALCOHOL", grid("How often", question("2b")), question("3")),
+    section("About tobacco", question("4")),
+    section("About alcohol", question("5")) # not straight after it: another section of that name
+  )))
+  expect_equal(vapply(tidied$components, function(block) block$text, ""), c("about alcohol", "about tobacco", "about alcohol"))
+  alcohol <- tidied$components[[1]]$children
+  expect_equal(vapply(alcohol, function(block) block$component_type, ""), c("Question", "Grid", "Question"))
+  expect_equal(vapply(alcohol[[2]]$children, function(block) block$printed_number, ""), c("2a", "2b"))
+  expect_equal(alcohol[[3]]$printed_number, "3")
+  expect_equal(vapply(alcohol, function(block) block$display_order, integer(1)), 1:3)
+})
+
 test_that("the prompt lists what the lookup tables hold", {
   instructions <- reading_service_instructions(test_lookups(), app_file("prompts", "extraction.md"))
   expect_false(grepl("{{", instructions, fixed = TRUE))
   expect_match(instructions, '"Interviewer Script"', fixed = TRUE)
   expect_match(instructions, '"Grid"', fixed = TRUE)
   expect_match(instructions, '"siblings"', fixed = TRUE)
-  expect_match(instructions, '"past 30 days"', fixed = TRUE)
-  expect_match(instructions, '"twins (compared)"', fixed = TRUE)
+  expect_match(instructions, '"past month"', fixed = TRUE)
+  # the lists are shown as the site writes them now, each name once: a tag kept under an older name isn't offered
+  expect_equal(as_written(normal_time_frame, c("past 30 days", "past month", "Past 12 months", "lifetime", NA), "none"), c("past month", "past year", "lifetime"))
+  expect_equal(as_written(normal_unit, c("cigarettes per day", "cigarettes", "days per week"), "none"), c("cigarettes", "days"))
+  expect_equal(as_written(normal_unit, character(), c("years", "pounds")), c("years", "pounds"))
   expect_match(instructions, "  - not difficult at all", fixed = TRUE)
 })
 
@@ -219,6 +259,9 @@ test_that("the prompt's example is a draft with no problems", {
 test_that("the JSON is found in Gemini's answer, fenced or not", {
   expect_equal(json_in('```json\n{"components": [{"component_type": "Note"}]}\n```')$components[[1]]$component_type, "Note")
   expect_equal(json_in('{"a": {"b": 1}}'), list(a = list(b = 1L)))
+  # a bracket too many at the end (Gemini loses count closing a deep nest) is left off; a brace inside words isn't one
+  expect_equal(json_in('{"a": [{"b": "1 } or \\"2\\""}]}]}'), list(a = list(list(b = '1 } or "2"'))))
+  expect_error(json_in('{"a": [{"b": 1}'), "parse error|premature") # cut short: nothing to recover
   expect_error(json_in("I couldn't read it."), "no JSON object")
 })
 
@@ -400,6 +443,34 @@ test_that("a request about a file given as text sends the prompt alone", {
 })
 
 # ------ MATR IDs and codes from a second file ---------------------------------------------
+test_that("a variable is described to the code file's reader with who and when it is about, its own or its question's", {
+  described <- assign_variables(list(components = list(list(
+    component_type = "Question", text = "on how many occasions have the twins smoked?", printed_number = "49", subject = "twins",
+    variables = list(
+      list(variable_type = "open_ended", time_frame = "lifetime"),
+      list(variable_type = "open_ended", time_frame = "past 12 months", subject = "twin a")
+    )
+  ))))
+  expect_equal(vapply(described, `[[`, "", "when"), c("lifetime", "past 12 months"))
+  expect_equal(vapply(described, `[[`, "", "about"), c("twins", "twin a"))
+})
+
+test_that("a reading's problems name the right blocks when questions about each twin were joined", {
+  asked <- function(text, number, ...) {
+    c(list(component_type = "Question", text = text, printed_number = number, variables = list(
+      list(variable_type = "open_ended", answer_data_type = "NUMBER")
+    )), list(...))
+  }
+  json <- list(questionnaire = list(), components = list(
+    asked("How old are the twins?", "8", subject = "twin a"),
+    asked("How old are the twins?", "24", subject = "twin b"), # joined with 8 when the reading is opened
+    asked("Do you smoke?", "40"),
+    asked("If yes, how much?", "41", parent_question = "99") # no question 99
+  ))
+  expect_no_warning(problems <- reading_service_problems(json, test_lookups()))
+  expect_equal(problems, "Question 41: names question 99 as its parent, but no question has that number.")
+})
+
 assign_prompt <- app_file("prompts", "assign_codes.md")
 
 test_that("the file of MATR IDs and codes gives the variables their IDs and the choices their codes", {

@@ -99,7 +99,7 @@ questionnaire_preview_rows <- function(draft) {
         add(
           section, "Question",
           matr_id = box$matr_id, missing = if (is.na(box$matr_id)) "no MATR ID" else "",
-          text = words, tags = preview_variable_tags(box), coding = preview_coding(box, draft)
+          text = words, tags = preview_variable_tags(box, block), coding = preview_coding(box, draft)
         )
       }
     }
@@ -148,10 +148,13 @@ preview_question_words <- function(block) {
   if (nzchar(trimmed)) trimmed else block$text
 }
 
-# "[Drinks] [hours] [in the past 30 days] [Siblings]": the variable's label, a write-in's unit, when and who it is
-# about, each when it has one (a variable about the respondent has no subject), or "".
-preview_variable_tags <- function(box) {
-  tags <- c(box$label, box$unit, box$time_frame, box$subject)
+# "[Drinks] [hours] [past 30 days] [siblings]": the variable's label, a write-in's unit, then when and who its
+# answer is about (its own tag of each kind, or else its question's), each when there is one (a variable about the
+# respondent has no subject), or "".
+# block: The variable's question, whose own tags are about all its variables.
+preview_variable_tags <- function(box, block = NULL) {
+  of_kind <- function(kind) if (is.na(box[[kind]])) block[[kind]] %||% NA_character_ else box[[kind]]
+  tags <- c(box$label, box$unit, of_kind("time_frame"), of_kind("subject"))
   tags <- trimws(tags[!is.na(tags)])
   tags <- tags[nzchar(tags)]
   if (length(tags) > 0) paste0("[", tags, "]", collapse = " ") else ""
@@ -225,7 +228,8 @@ extraction_request_ui <- function(preview, draft, pdf_url = NULL, basic_info = N
 }
 
 # One card of what a push adds: a row that is there, or a NEW one, the way Make an edit shows a row.
-# card: A list: `kind` (e.g. `"Study"`), `title`, `subtitle`, `facts` (short notes) and `is_new`.
+# card: A list: `kind` (e.g. `"Study"`), `title`, `subtitle`, `facts` (short notes, each a chip), `lists` (what
+#   a chip counts, by the chip's words, if it is listed: `request_fact_ui()`) and `is_new`.
 request_card_ui <- function(card) {
   div(
     class = c("edit-card", "request-card", if (isTRUE(card$is_new)) "is-new", if (isTRUE(card$is_missing)) "is-missing"),
@@ -233,8 +237,38 @@ request_card_ui <- function(card) {
     div(class = "edit-card-head", span(class = "request-card-kind", card$kind)),
     h3(class = "edit-card-title", card$title),
     if (nzchar(card$subtitle %||% "")) p(class = "edit-card-subtitle", card$subtitle),
-    if (length(card$facts) > 0) div(class = "edit-card-facts", lapply(card$facts, function(fact) row_badge(fact)))
+    if (length(card$facts) > 0) {
+      div(class = "edit-card-facts", lapply(card$facts, function(fact) request_fact_ui(fact, card$lists[[fact]])))
+    }
   )
+}
+
+# One chip of a card ("5 new", "7 already in the database"). When the card says what the chip counts
+# (`card$lists`), pointing at the chip, or reaching it with the keyboard, lists them.
+# names: What it counts, by name, or `NULL`.
+request_fact_ui <- function(fact, names = NULL) {
+  if (length(names) == 0) {
+    return(row_badge(fact))
+  }
+  bslib::tooltip(
+    row_badge(fact, class = "has-list", tabindex = "0"),
+    request_names_ui(names),
+    options = list(customClass = "list-tooltip")
+  )
+}
+
+# The most names in one column of a chip's tooltip: more go in further columns beside it, so a long list is as
+# tall as the screen allows and no taller. _history.scss has a class for each length up to this one.
+request_names_per_column <- 30
+
+# Names for a chip's tooltip: every one, in the order given, each with a bullet of its own. A list longer than
+# `request_names_per_column` is set in columns of even length (its class says how long, `is-rows-23`:
+# _history.scss lays them out), and the tooltip is as wide as its names need, so none is cut or wrapped while the
+# screen has room.
+request_names_ui <- function(names) {
+  columns <- ceiling(length(names) / request_names_per_column)
+  rows <- ceiling(length(names) / max(columns, 1))
+  tags$ul(class = c("list-tooltip-lines", paste0("is-rows-", rows)), lapply(names, tags$li))
 }
 
 # Each row the cards count, a list for each card to open, in the order of their words: which are added and which

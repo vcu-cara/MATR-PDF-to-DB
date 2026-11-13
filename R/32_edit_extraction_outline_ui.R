@@ -486,8 +486,9 @@ question_panel <- function(block, draft, view, lookups, ns) {
 
 # The details of the block picked in the list, edited beside it.
 # The header is one row: the block's kind, its words (typed there; a group has none) and what there
-# is to fix. Then, for a question, the number printed beside it, the earlier question it depends on
-# (`depends_on_field()`), and its variables and their choices (`question_panel()`); for a section, grid or
+# is to fix. Then, for a question, the number printed beside it with its own tags next to it (`question_tags()`:
+# who and when all of it is about), the earlier question it depends on (`depends_on_field()`), and its variables
+# and their choices (`question_panel()`); for a section, grid or
 # group, how many blocks it holds. Its buttons are along the bottom (`detail_actions()`). Fields have a small
 # label above them. They are the list's own (the same `data-field`s), so the page script keeps the row and the
 # details in step as words are typed.
@@ -516,11 +517,14 @@ block_detail <- function(block, draft, view, lookups, ns) {
         tagList(
           detail_section(
             NULL,
-            detail_field(tagList(app_icon("question_number"), " Question Number"), field_text(
-              "components", block, "printed_number",
-              placeholder = "None", label = "Question number as printed, e.g. 1a4 (blank if none is printed)", problems = problems
-            ) |> tagAppendAttributes(class = "detail-number")),
-            detail_field("Depends on", depends_on_field(block, draft, problems), wide = TRUE)
+            detail_row(
+              detail_field(tagList(app_icon("question_number"), " Question Number"), field_text(
+                "components", block, "printed_number",
+                placeholder = "None", label = "Question number as printed, e.g. 1a4 (blank if none is printed)", problems = problems
+              ) |> tagAppendAttributes(class = "detail-number")),
+              detail_field("Question Tags", question_tags(block, view, ns))
+            ),
+            detail_field(label_with_help("Depends on", depends_on_help), depends_on_field(block, draft, problems), wide = TRUE)
           ),
           detail_section("Variables", question_panel(block, draft, view, lookups, ns))
         )
@@ -540,14 +544,14 @@ block_detail <- function(block, draft, view, lookups, ns) {
 depends_on_field <- function(block, draft, problems) {
   questions <- outline_questions(draft)$questions
   earlier <- questions[questions$position < questions$position[questions$id == block$id], , drop = FALSE]
-  tagList(
-    field_select(
-      "components", block, "parent_question_id", stats::setNames(earlier$id, earlier$label),
-      blank = "Stands on its own", optional = TRUE, label = "The earlier question this one depends on", problems = problems
-    ),
-    p(class = "detail-note", "The earlier question this one only makes sense after (a follow-up, e.g. “When did you start?” after “Do you smoke?”).")
+  field_select(
+    "components", block, "parent_question_id", stats::setNames(earlier$id, earlier$label),
+    blank = "Stands on its own", optional = TRUE, label = "The earlier question this one depends on", problems = problems
   )
 }
+
+# What Depends on is for, said in the tooltip beside its name (`label_with_help()`).
+depends_on_help <- "The earlier question this one only makes sense after (a follow-up, e.g. “When did you start?” after “Do you smoke?”)."
 
 # Words in curly quotes: “Yes”. None gives none (recycle0), not an empty pair of quotes.
 quoted <- function(words) paste0("“", words, "”", recycle0 = TRUE)
